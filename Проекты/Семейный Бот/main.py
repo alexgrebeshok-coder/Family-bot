@@ -31,7 +31,7 @@ CITIES = {
 }
 
 DEFAULT_NEWS_LIMIT = 3
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 HOLIDAYS_FIXED = {
     "01-01": "Новый год",
@@ -184,6 +184,8 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-Title": "Family Bot MVP",
     }
     payload = {
         "model": model,
@@ -195,7 +197,7 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
         "max_tokens": 500,
     }
 
-    r = requests.post(GROQ_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
+    r = requests.post(OPENROUTER_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
     r.raise_for_status()
     data = r.json()
     return data["choices"][0]["message"]["content"].strip()
@@ -227,12 +229,12 @@ def main() -> int:
     try:
         tg_token = require_env("TELEGRAM_BOT_TOKEN")
         tg_chat = require_env("TELEGRAM_CHAT_ID")
-        groq_key = require_env("GROQ_API_KEY")
+        openrouter_key = require_env("OPENROUTER_API_KEY")
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         return 1
 
-    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    model = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
 
     rss_surgut = os.getenv("RSS_SURGUT", "").strip()
     rss_moscow = os.getenv("RSS_MOSCOW", "").strip()
@@ -243,7 +245,7 @@ def main() -> int:
     news = get_news(rss_urls)
 
     prompt = build_prompt(weather, holidays, news)
-    post = generate_post(prompt, groq_key, model)
+    post = generate_post(prompt, openrouter_key, model)
 
     send_telegram(tg_token, tg_chat, post)
     return 0
