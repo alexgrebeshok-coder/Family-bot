@@ -13,4 +13,4 @@
 3. Запуск: `python main.py`.
 
 ## Расписание
-Cron уже настроен в OpenClaw на 07:30 (Asia/Yekaterinburg).
+Локальный cron: 07:30 Asia/Yekaterinburg через `run_daily.sh` (с логом /tmp/family_bot.log и авто‑повтором).
