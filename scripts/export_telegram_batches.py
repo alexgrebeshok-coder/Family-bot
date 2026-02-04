@@ -66,8 +66,14 @@ async def export_dialog(d):
 async def main():
     await client.connect()
     dialogs = [d async for d in client.iter_dialogs()]
+    # process only one chat per run (first not done, non-user)
     for d in dialogs:
+        if d.is_user:
+            continue
+        if d.id in done_ids:
+            continue
         await export_dialog(d)
+        break
     await client.disconnect()
 
 asyncio.run(main())
