@@ -41,6 +41,7 @@ PARENT_NOTIFY_HOUR = 21
 DEFAULT_LIST_NAME = "покупки"
 
 ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 NEGATIVE_TOPICS = [
     "политик", "выбор", "войн", "обстрел", "насили", "убий", "криминал",
@@ -838,12 +839,62 @@ def with_menu(text: str, profile: Dict[str, Any]) -> tuple[str, dict]:
     return text, main_menu_keyboard(profile)
 
 
+def _fallback_reply() -> str:
+    return "Я здесь 🙂 Напиши, что нужно, или нажми «Меню»."
+
+
+def generate_openrouter_reply(user_text: str, audience: str) -> Optional[str]:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("OPENROUTER_MODEL", "liquid/lfm-2.5-1.2b-instruct:free")
+    system = (
+        "Ты семейный помощник в личных сообщениях. "
+        "Отвечай коротко, дружелюбно и безопасно. "
+        "Запрещено: политика, медицина, юридические/финансовые советы, насилие, 18+, радикализация. "
+        "Если тема запрещена — вежливо откажись и предложи сменить тему."
+    )
+    if audience == "child":
+        system += " Ответы для ребёнка: простыми словами, без сложных терминов."
+    elif audience == "grandma":
+        system += " Ответы для бабушки: очень тепло, уважительно, простыми словами, без техничных терминов."
+    else:
+        system += " Ответы для взрослых: коротко и по делу, без лишней болтовни."
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 0.5,
+        "max_tokens": 160,
+    }
+    try:
+        r = requests.post(
+            OPENROUTER_API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        msg = data["choices"][0]["message"]["content"]
+        msg = str(msg).strip() if msg is not None else ""
+        return msg or None
+    except Exception:
+        return None
+
+
 def generate_zai_reply(user_text: str, audience: str) -> str:
     api_key = os.getenv("ZAI_API_KEY")
     if not api_key:
-        return "Я понял! Если хочешь, добавь это в расписание (/schedule add ...) или в дела (/todo add ...)."
+        reply = generate_openrouter_reply(user_text, audience)
+        return reply or _fallback_reply()
     model = os.getenv("ZAI_MODEL", "glm-4.7")
     base_url = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
+    if "/coding/" in base_url:
+        base_url = ZAI_API_BASE_DEFAULT
     url = base_url.rstrip("/") + "/chat/completions"
 
     system = (
@@ -868,16 +919,27 @@ def generate_zai_reply(user_text: str, audience: str) -> str:
         "temperature": 0.5,
         "max_tokens": 160,
     }
+    thinking_mode = os.getenv("ZAI_THINKING", "")
+    if thinking_mode.lower() in {"disabled", "off", "no"}:
+        payload["thinking"] = {"type": "disabled"}
     try:
         r = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, data=json.dumps(payload), timeout=20)
+        if r.status_code == 429:
+            reply = generate_openrouter_reply(user_text, audience)
+            return reply or _fallback_reply()
         r.raise_for_status()
         data = r.json()
         msg = data["choices"][0]["message"]["content"]
         if isinstance(msg, list):
             msg = "".join([p.get("text", "") for p in msg if isinstance(p, dict)])
-        return str(msg).strip()
+        msg = str(msg).strip() if msg is not None else ""
+        if not msg:
+            reply = generate_openrouter_reply(user_text, audience)
+            return reply or _fallback_reply()
+        return msg
     except Exception:
-        return "Я понял! Если хочешь, добавь это в расписание (/schedule add ...) или в дела (/todo add ...)."
+        reply = generate_openrouter_reply(user_text, audience)
+        return reply or _fallback_reply()
 
 
 def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> tuple[str, dict] | str:
