@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Asia/Yekaterinburg")
 STATE_PATH = Path("data/family_state.json")
 FACTS_PATH = Path("data/facts.json")
+RELATIONS_PATH = Path("data/family_relations.json")
 
 QUIET_START = 22  # 22:00
 QUIET_END = 6     # 06:00
@@ -153,22 +154,62 @@ def load_facts() -> List[str]:
         return []
 
 
-def classify_role(text: str) -> Optional[bool]:
+def load_relations() -> Dict[str, Any]:
+    if not RELATIONS_PATH.exists():
+        return {}
+    try:
+        return json.loads(RELATIONS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def normalize_name(name: str) -> str:
+    return re.sub(r"\s+", "", (name or "").lower())
+
+
+def profile_name(profile: Dict[str, Any]) -> str:
+    return (
+        profile.get("name")
+        or profile.get("address_as")
+        or profile.get("tg_first_name")
+        or ""
+    )
+
+
+def update_profile_from_user(profile: Dict[str, Any], user: Dict[str, Any]) -> None:
+    if not user:
+        return
+    profile["tg_first_name"] = user.get("first_name") or profile.get("tg_first_name") or ""
+    profile["tg_last_name"] = user.get("last_name") or profile.get("tg_last_name") or ""
+    profile["tg_username"] = user.get("username") or profile.get("tg_username") or ""
+
+
+def classify_audience(text: str) -> Optional[str]:
     t = (text or "").lower()
-    adult_markers = ["мама", "пап", "отец", "мать", "бабуш", "дедуш", "дяд", "тет", "муж", "жена", "родител", "админ", "создател", "взросл", "опекун"]
+    grandma_markers = ["бабуш", "баба ", "баба", "бабуля", "бабушка", "бабуля"]
+    adult_markers = ["мама", "пап", "отец", "мать", "дедуш", "дяд", "тет", "муж", "жена", "родител", "админ", "создател", "взросл", "опекун"]
     child_markers = ["реб", "сын", "дочь", "мальчик", "девоч", "школьник", "дошкол"]
+    if any(k in t for k in grandma_markers):
+        return "grandma"
     if any(k in t for k in adult_markers):
-        return False
+        return "adult"
     if any(k in t for k in child_markers):
-        return True
+        return "child"
     return None
 
 
 def is_child_profile(profile: Dict[str, Any]) -> bool:
+    audience = profile.get("audience")
+    if audience == "child":
+        return True
+    if audience in {"adult", "grandma"}:
+        return False
     role = (profile.get("role") or "")
-    inferred = classify_role(role)
-    if inferred is not None:
-        return inferred
+    inferred = classify_audience(role)
+    if inferred == "child":
+        return True
+    if inferred in {"adult", "grandma"}:
+        return False
     if profile.get("is_child") is True:
         return True
     if profile.get("is_child") is False:
@@ -232,12 +273,36 @@ def weekend_idea(profile: Dict[str, Any]) -> str:
     return random.choice(generic)
 
 
+def _relations_parents_for(child_name: str, relations: Dict[str, Any]) -> List[str]:
+    if not child_name or not relations:
+        return []
+    n = normalize_name(child_name)
+    for item in relations.get("children", []):
+        names = [item.get("name", "")] + item.get("aliases", [])
+        if any(normalize_name(x) == n for x in names if x):
+            return item.get("parents", []) or []
+    return []
+
+
 def notify_parents(token: str, state: Dict[str, Any], child_id: int, child_profile: Dict[str, Any], message: str) -> None:
     parents = ensure_family_settings(state).get("parent_ids", [])
     if not parents:
         return
-    child_name = child_profile.get("name") or "Ребёнок"
-    for pid in parents:
+    child_name = profile_name(child_profile) or "Ребёнок"
+    relations = load_relations()
+    target_parent_names = _relations_parents_for(child_name, relations)
+
+    selected_parents = []
+    if target_parent_names:
+        for pid in parents:
+            pprof = state.get("profiles", {}).get(str(pid), {})
+            pname = profile_name(pprof)
+            if any(normalize_name(pname) == normalize_name(x) for x in target_parent_names):
+                selected_parents.append(pid)
+    if not selected_parents:
+        selected_parents = parents
+
+    for pid in selected_parents:
         try:
             if int(pid) == int(child_id):
                 continue
@@ -251,6 +316,8 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     return profiles.setdefault(str(user_id), {
         "name": "",
         "role": "",
+        "audience": "",
+        "address_as": "",
         "is_child": None,
         "age": None,
         "birthday": "",
@@ -264,6 +331,9 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
         "last_user_message_at": "",
         "last_fact_idx": None,
         "last_parent_notify": "",
+        "tg_first_name": "",
+        "tg_last_name": "",
+        "tg_username": "",
     })
 
 
@@ -317,31 +387,50 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
     if step == "role":
         role_text = text
         profile["role"] = role_text
-        inferred = classify_role(role_text)
-        if inferred is True:
+        inferred = classify_audience(role_text)
+        if inferred == "child":
+            profile["audience"] = "child"
             profile["is_child"] = True
-            set_awaiting(profile, "age")
-            return "Сколько тебе лет?"
-        if inferred is False:
+            set_awaiting(profile, "child_name")
+            return "Как тебя зовут?"
+        if inferred == "adult":
+            profile["audience"] = "adult"
             profile["is_child"] = False
             set_awaiting(profile, "name")
             return "Как тебя зовут?"
+        if inferred == "grandma":
+            profile["audience"] = "grandma"
+            profile["is_child"] = False
+            set_awaiting(profile, "name")
+            return "Как вас зовут?"
         set_awaiting(profile, "role_confirm")
-        return "Ты ребёнок или взрослый? (ответь: ребёнок/взрослый)"
+        return "Ты ребёнок, взрослый или бабушка? (ответь: ребёнок/взрослый/бабушка)"
 
     if step == "role_confirm":
         role_text = text
         profile["role"] = role_text
-        inferred = classify_role(role_text)
-        if inferred is True:
+        inferred = classify_audience(role_text)
+        if inferred == "child":
+            profile["audience"] = "child"
             profile["is_child"] = True
-            set_awaiting(profile, "age")
-            return "Сколько тебе лет?"
-        if inferred is False:
+            set_awaiting(profile, "child_name")
+            return "Как тебя зовут?"
+        if inferred == "adult":
+            profile["audience"] = "adult"
             profile["is_child"] = False
             set_awaiting(profile, "name")
             return "Как тебя зовут?"
-        return "Пожалуйста, ответь: ребёнок или взрослый."
+        if inferred == "grandma":
+            profile["audience"] = "grandma"
+            profile["is_child"] = False
+            set_awaiting(profile, "name")
+            return "Как вас зовут?"
+        return "Пожалуйста, ответь: ребёнок / взрослый / бабушка."
+
+    if step == "child_name":
+        profile["name"] = text
+        set_awaiting(profile, "age")
+        return "Сколько тебе лет?"
 
     if step == "age":
         m = re.search(r"\d+", text)
@@ -372,13 +461,32 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
 
     if step == "name":
         profile["name"] = text
+        if profile.get("audience") == "grandma":
+            set_awaiting(profile, "address_as")
+            return "Как к вам обращаться? (например, Баба Маша)"
         set_awaiting(profile, "relation")
-        return "Кто ты в семье? (мама/папа/бабушка/дедушка/дядя/тётя)"
+        return "Кто ты в семье? (мама/папа/дедушка/дядя/тётя)"
 
     if step == "relation":
         profile["role"] = text
+        if profile.get("audience") == "grandma":
+            set_awaiting(profile, "address_as")
+            return "Как к вам обращаться? (например, Баба Маша)"
+        set_awaiting(profile, "adult_age")
+        return "Сколько вам лет? (если не хотите отвечать — напишите «пропустить»)"
+
+    if step == "address_as":
+        profile["address_as"] = text
+        set_awaiting(profile, "adult_age")
+        return "Сколько вам лет? (если не хотите отвечать — напишите «пропустить»)"
+
+    if step == "adult_age":
+        if "проп" not in text.lower():
+            m = re.search(r"\d+", text)
+            if m:
+                profile["age"] = int(m.group(0))
         set_awaiting(profile, "")
-        return "Спасибо! Если захочешь — можешь добавить напоминания или расписание."
+        return "Спасибо! Если хотите получать уведомления о детях — напишите /parent."
 
     return None
 
@@ -401,7 +509,7 @@ def build_help() -> str:
     )
 
 
-def generate_zai_reply(user_text: str, is_child: bool) -> str:
+def generate_zai_reply(user_text: str, audience: str) -> str:
     api_key = os.getenv("ZAI_API_KEY")
     if not api_key:
         return "Я понял! Если хочешь, добавь это в расписание (/schedule add ...) или в дела (/todo add ...)."
@@ -415,8 +523,12 @@ def generate_zai_reply(user_text: str, is_child: bool) -> str:
         "Запрещено: политика, медицина, юридические/финансовые советы, насилие, 18+, радикализация. "
         "Если тема запрещена — вежливо откажись и предложи сменить тему."
     )
-    if is_child:
+    if audience == "child":
         system += " Ответы для ребёнка: простыми словами, без сложных терминов."
+    elif audience == "grandma":
+        system += " Ответы для бабушки: очень тепло, уважительно, простыми словами, без техничных терминов."
+    else:
+        system += " Ответы для взрослых: коротко и по делу, без лишней болтовни."
 
     payload = {
         "model": model,
@@ -454,7 +566,7 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         save_state(state)
         return (
             "Привет! Я семейный помощник 😊\n"
-            "Подскажи, кто ты в семье? (ребёнок/мама/папа/бабушка/дедушка)"
+            "Подскажи, кто ты в семье? (ребёнок/взрослый/бабушка)"
         )
 
     if norm.startswith("/help"):
@@ -540,8 +652,8 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
     if not is_allowed(norm):
         return "Эту тему я не обсуждаю. Давай о чём‑то другом 🙂"
 
-    is_child = is_child_profile(profile)
-    return generate_zai_reply(norm, is_child)
+    audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
+    return generate_zai_reply(norm, audience)
 
 
 # -----------------------------
@@ -643,6 +755,7 @@ def main() -> int:
                     continue
 
                 profile = profile_for(state, user_id)
+                update_profile_from_user(profile, user)
                 response = handle_message(text, user_id, profile, state)
                 if response:
                     send_message(token, user_id, response, state)
