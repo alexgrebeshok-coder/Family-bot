@@ -223,6 +223,41 @@ def role_keyboard() -> dict:
     }
 
 
+def cancel_keyboard() -> dict:
+    return {
+        "keyboard": [[{"text": "Отмена"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def main_menu_keyboard(profile: Dict[str, Any]) -> dict:
+    audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
+    if audience == "child":
+        keyboard = [
+            [{"text": "Моё расписание"}, {"text": "Добавить в расписание"}],
+            [{"text": "Мои дела"}, {"text": "Добавить дело"}],
+            [{"text": "Интересный факт"}, {"text": "Идея на выходной"}],
+            [{"text": "Напоминание"}, {"text": "Дни рождения"}],
+            [{"text": "Указать ДР"}, {"text": "Помощь"}],
+        ]
+    elif audience == "grandma":
+        keyboard = [
+            [{"text": "Напоминание"}, {"text": "Дни рождения"}],
+            [{"text": "Указать ДР"}, {"text": "Помощь"}],
+        ]
+    else:
+        keyboard = [
+            [{"text": "Список покупок"}, {"text": "Добавить в список"}],
+            [{"text": "Расписание"}, {"text": "Добавить в расписание"}],
+            [{"text": "Мои дела"}, {"text": "Добавить дело"}],
+            [{"text": "Напоминание"}, {"text": "Мои напоминания"}],
+            [{"text": "Дни рождения"}, {"text": "Указать ДР"}],
+            [{"text": "Помощь"}],
+        ]
+    return {"keyboard": keyboard, "resize_keyboard": True}
+
+
 def classify_audience(text: str) -> Optional[str]:
     t = (text or "").lower()
     grandma_markers = ["бабуш", "баба ", "баба", "бабуля", "бабушка", "бабуля"]
@@ -737,7 +772,11 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
     if step == "schedule":
         add_schedule(profile, text)
         set_awaiting(profile, "")
-        return "Спасибо! Если что-то изменится — просто напиши или используй /schedule add."
+        return (
+            "Спасибо! Я сохранил расписание.\n"
+            "Если нужно — просто напиши, и я обновлю.",
+            main_menu_keyboard(profile),
+        )
 
     if step == "name":
         profile["name"] = text
@@ -766,40 +805,25 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
             if m:
                 profile["age"] = int(m.group(0))
         set_awaiting(profile, "")
-        return "Спасибо! Если хотите получать уведомления о детях — напишите /parent."
+        return (
+            "Спасибо! Готово.\n"
+            "Если хотите получать уведомления о детях — напишите «Хочу уведомления».",
+            main_menu_keyboard(profile),
+        )
 
     return None
 
 
 def build_help() -> str:
     return (
-        "Команды:\n"
-        "/help — помощь\n"
-        "/schedule — показать расписание\n"
-        "/schedule add <текст> — добавить занятие\n"
-        "/todo add <дело> — добавить дело\n"
-        "/todo list — список дел\n"
-        "/todo done <номер> — отметить выполненным\n"
-        "/list — общий список (по умолчанию «покупки»)\n"
-        "/list add <дело> — добавить в общий список\n"
-        "/list add список | дело — добавить в конкретный список\n"
-        "/list done <номер> — отметить в общем списке\n"
-        "/list done список <номер> — отметить в конкретном списке\n"
-        "/list clear — убрать выполненные\n"
-        "/list all — список списков\n"
-        "/remind 18:00 текст — напоминание на сегодня/завтра\n"
-        "/remind 25.02 18:00 текст — напоминание на дату\n"
-        "/remind list — список напоминаний\n"
-        "/remind delete <номер> — удалить напоминание\n"
-        "/birthdays — дни рождения\n"
-        "/birthday set 09.03 — сохранить свой день рождения\n"
-        "/interest <что интересно> — указать интересы\n"
-        "/fact — интересный факт\n"
-        "/idea — идея для выходного\n"
-        "/parent — получать уведомления о детях (для взрослых)\n"
-        "/parent off — отключить уведомления\n"
-        "/delete — удалить мои данные"
+        "Пользуйтесь кнопками меню ниже.\n"
+        "Что умею: списки, напоминания, расписание и дела, дни рождения, факты и идеи.\n"
+        "Если кнопки пропали — напишите «Меню»."
     )
+
+
+def with_menu(text: str, profile: Dict[str, Any]) -> tuple[str, dict]:
+    return text, main_menu_keyboard(profile)
 
 
 def generate_zai_reply(user_text: str, audience: str) -> str:
@@ -844,16 +868,134 @@ def generate_zai_reply(user_text: str, audience: str) -> str:
         return "Я понял! Если хочешь, добавь это в расписание (/schedule add ...) или в дела (/todo add ...)."
 
 
+def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> tuple[str, dict] | str:
+    low = text.lower().strip()
+    if low in {"отмена", "назад", "cancel"}:
+        set_awaiting(profile, "")
+        return with_menu("Ок, вернулся в меню.", profile)
+
+    if step == "list_add":
+        list_name, item = parse_list_add(text)
+        if not item:
+            return ("Напишите, что добавить (например: молоко или продукты | молоко).", cancel_keyboard())
+        add_shared_item(state, list_name, item, user_id)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu(f"Добавил в список «{list_name}».", profile)
+
+    if step == "list_done":
+        list_name, idx = parse_list_done(text)
+        if not idx:
+            return ("Напишите номер пункта (например: 2) или «продукты 2».", cancel_keyboard())
+        ok = complete_shared_item(state, list_name, idx)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu("Готово!" if ok else "Не нашёл такой номер.", profile)
+
+    if step == "list_clear":
+        name = ensure_list_name(text or DEFAULT_LIST_NAME)
+        removed = clear_shared_list(state, name, all_items=False)
+        set_awaiting(profile, "")
+        save_state(state)
+        if removed:
+            return with_menu(f"Убрал {removed} пункт(ов) из списка «{name}».", profile)
+        return with_menu(f"В списке «{name}» нечего убирать.", profile)
+
+    if step == "remind_input":
+        dt, message, err = parse_remind_args(text, now_local())
+        if err:
+            return (err, cancel_keyboard())
+        rid = add_reminder(state, user_id, dt, message)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu(f"Ок! Напомню {dt.strftime('%d.%m %H:%M')} (№{rid}).", profile)
+
+    if step == "birthday_set":
+        dm = parse_daymonth(text)
+        if not dm:
+            return ("Напишите дату в формате ДД.ММ (например, 09.03).", cancel_keyboard())
+        profile["birthday"] = f"{dm[0]:02d}.{dm[1]:02d}"
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu("Сохранил день рождения.", profile)
+
+    if step == "schedule_add":
+        if not text.strip():
+            return ("Напишите занятие для расписания.", cancel_keyboard())
+        add_schedule(profile, text)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu("Добавил в расписание.", profile)
+
+    if step == "todo_add":
+        if not text.strip():
+            return ("Напишите, какое дело добавить.", cancel_keyboard())
+        add_todo(profile, text)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu("Добавил дело.", profile)
+
+    if step == "todo_done":
+        m = re.search(r"\d+", text)
+        if not m:
+            return ("Напишите номер дела (например: 2).", cancel_keyboard())
+        idx = int(m.group(0))
+        resp = complete_todo(profile, idx)
+        set_awaiting(profile, "")
+        save_state(state)
+        return with_menu(resp, profile)
+
+    set_awaiting(profile, "")
+    return with_menu("Готово.", profile)
+
+
 def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> str:
     profile["last_user_message_at"] = now_local().isoformat()
     save_state(state)
-    # onboarding
-    if profile.get("awaiting"):
+
+    step = profile.get("awaiting") or ""
+    onboarding_steps = {
+        "start_confirm",
+        "role",
+        "role_confirm",
+        "child_name",
+        "age",
+        "grade",
+        "birthday",
+        "interests",
+        "schedule",
+        "name",
+        "relation",
+        "address_as",
+        "adult_age",
+    }
+    menu_steps = {
+        "list_add",
+        "list_done",
+        "list_clear",
+        "remind_input",
+        "birthday_set",
+        "schedule_add",
+        "todo_add",
+        "todo_done",
+    }
+
+    if step in onboarding_steps:
         resp = handle_onboarding(text, profile)
         save_state(state)
         return resp or "Спасибо!"
+    if step in menu_steps:
+        resp = handle_menu_input(step, text, user_id, profile, state)
+        save_state(state)
+        return resp
 
     norm = text.strip()
+    low = norm.lower()
+
+    # soft menu triggers
+    if low in {"меню", "menu", "начать", "start"}:
+        return ("Вот меню:", main_menu_keyboard(profile))
+
     if norm.startswith("/start"):
         set_awaiting(profile, "start_confirm")
         save_state(state)
@@ -863,7 +1005,66 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         )
 
     if norm.startswith("/help"):
-        return build_help()
+        return with_menu(build_help(), profile)
+
+    # button/menu text handling
+    if low in {"помощь"}:
+        return with_menu(build_help(), profile)
+    if low in {"список покупок", "покупки", "список"}:
+        return with_menu(format_shared_list(state, DEFAULT_LIST_NAME), profile)
+    if low in {"добавить в список", "добавить список"}:
+        set_awaiting(profile, "list_add")
+        return ("Что добавить в список?", cancel_keyboard())
+    if low in {"отметить в списке", "сделал в списке"}:
+        set_awaiting(profile, "list_done")
+        return ("Напишите номер пункта (например: 2).", cancel_keyboard())
+    if low in {"очистить список", "убрать выполненное"}:
+        set_awaiting(profile, "list_clear")
+        return ("Какой список очистить? (по умолчанию «покупки»)", cancel_keyboard())
+    if low in {"напоминание", "напомни"}:
+        set_awaiting(profile, "remind_input")
+        return ("Напишите время и текст: 18:00 позвонить", cancel_keyboard())
+    if low in {"мои напоминания"}:
+        return with_menu(list_reminders(state, user_id), profile)
+    if low in {"моё расписание", "расписание"}:
+        return with_menu(format_schedule(profile), profile)
+    if low in {"добавить в расписание", "добавить расписание"}:
+        set_awaiting(profile, "schedule_add")
+        return ("Напишите занятие для расписания.", cancel_keyboard())
+    if low in {"мои дела", "дела"}:
+        return with_menu(list_todos(profile), profile)
+    if low in {"добавить дело"}:
+        set_awaiting(profile, "todo_add")
+        return ("Какое дело добавить?", cancel_keyboard())
+    if low in {"сделал дело", "отметить дело"}:
+        set_awaiting(profile, "todo_done")
+        return ("Какой номер дела отметить?", cancel_keyboard())
+    if low in {"интересный факт", "факт", "факт дня"}:
+        return with_menu(weekend_fact(profile), profile)
+    if low in {"идея на выходной", "идея"}:
+        return with_menu(weekend_idea(profile), profile)
+    if low in {"дни рождения"}:
+        return with_menu(list_birthdays(state), profile)
+    if low in {"указать др", "мой др", "день рождения"}:
+        set_awaiting(profile, "birthday_set")
+        return ("Напишите дату в формате ДД.ММ (например, 09.03).", cancel_keyboard())
+    if low in {"хочу уведомления", "включить уведомления", "уведомления"}:
+        if is_child_profile(profile):
+            return with_menu("Эта функция только для взрослых.", profile)
+        fs = ensure_family_settings(state)
+        parents = fs.get("parent_ids", [])
+        if user_id not in parents:
+            parents.append(user_id)
+            fs["parent_ids"] = parents
+            save_state(state)
+        return with_menu("Уведомления включены.", profile)
+    if low in {"отключить уведомления", "не хочу уведомления"}:
+        fs = ensure_family_settings(state)
+        parents = fs.get("parent_ids", [])
+        if user_id in parents:
+            parents.remove(user_id)
+            save_state(state)
+        return with_menu("Уведомления отключены.", profile)
 
     if norm.startswith("/schedule add"):
         item = norm.replace("/schedule add", "").strip()
