@@ -55,6 +55,7 @@ DEFAULT_MAX_POST_LINES = 8
 DEFAULT_ORTHODOX_ICAL_URL = "https://azbyka.ru/days/ics/calendar.ics"
 DEFAULT_ORTHODOX_ICAL_PATH = "data/orthodox.ics"
 DEFAULT_TRADITIONS_PATH = "data/traditional_holidays.json"
+DEFAULT_HISTORY_PATH = "data/historical_events.json"
 DEFAULT_ORTHODOX_ALLOW_DOWNLOAD = 0
 
 ENCOURAGING_PHRASES = [
@@ -229,6 +230,26 @@ def get_traditions(today: date, path: Path) -> str:
     fixed = get_traditional_today(today, path)
     if fixed:
         return fixed
+    return ""
+
+
+def load_historical_events(path: Path) -> List[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
+
+def get_historical_event(today: date, path: Path) -> str:
+    key = today.strftime("%m-%d")
+    for item in load_historical_events(path):
+        if item.get("date") == key:
+            return item.get("event") or ""
     return ""
 
 
@@ -433,6 +454,7 @@ def build_prompt(
     weather: Dict[str, str],
     holidays: str,
     traditions: str,
+    history_event: str,
     news: List[str],
     max_chars: int,
     max_lines: int,
@@ -442,6 +464,7 @@ def build_prompt(
     weather_lines = "\n".join([f"• {city}: {desc}" for city, desc in weather.items()])
     news_lines = "\n".join([f"• {n}" for n in news]) if news else "• Сегодня без заметных местных новостей"
     traditions_line = traditions if traditions else ""
+    history_line = history_event if history_event else ""
 
     return textwrap.dedent(
         f"""
@@ -452,10 +475,11 @@ def build_prompt(
         Структура:
         1) Приветствие + эмодзи (1 строка)
         2) Погода: 3 коротких пункта (Сургут/Тюмень/Москва)
-        3) Праздники: 1 строка (максимум 2 праздника)
+        3) Праздники: 1 строка (максимум 2 праздника; если нет — «Сегодня спокойный день»)
         4) Традиции: 1 строка, если есть (Масленица/пост/русские традиции)
-        5) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
-        6) Короткая ободряющая фраза (1 строка)
+        5) История: 1 строка, если есть (позитивное историческое событие)
+        6) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
+        7) Короткая ободряющая фраза (1 строка)
 
         Если новостей нет — оставь строку «Сегодня без заметных местных новостей».
         Не добавляй ссылки и хэштеги.
@@ -470,6 +494,9 @@ def build_prompt(
         Традиции:
         {traditions_line}
 
+        История:
+        {history_line}
+
         Новости:
         {news_lines}
         """
@@ -480,6 +507,7 @@ def build_fallback_post(
     weather: Dict[str, str],
     holidays: str,
     traditions: str,
+    history_event: str,
     news: List[str],
     today: datetime,
 ) -> str:
@@ -490,10 +518,12 @@ def build_fallback_post(
     lines: List[str] = [greeting, weather_line, holiday_line]
     if traditions:
         lines.append(f"Традиции: {traditions}")
+    if history_event:
+        lines.append(f"История: {history_event}")
 
     if news:
-        lines.append("Новости:")
-        lines.extend([f"• {n}" for n in news])
+        news_line = "Новости: " + "; ".join(news)
+        lines.append(news_line)
     else:
         lines.append("Новости: Сегодня без заметных местных новостей")
 
@@ -665,6 +695,7 @@ def main() -> int:
     orthodox_path = Path(os.getenv("ORTHODOX_ICAL_PATH", DEFAULT_ORTHODOX_ICAL_PATH))
     orthodox_allow_download = os.getenv("ORTHODOX_ALLOW_DOWNLOAD", str(DEFAULT_ORTHODOX_ALLOW_DOWNLOAD)) == "1"
     traditions_path = Path(os.getenv("TRADITIONS_PATH", DEFAULT_TRADITIONS_PATH))
+    history_path = Path(os.getenv("HISTORICAL_EVENTS_PATH", DEFAULT_HISTORY_PATH))
 
     max_post_chars = get_int_env("MAX_POST_CHARS", DEFAULT_MAX_POST_CHARS)
     max_post_lines = get_int_env("MAX_POST_LINES", DEFAULT_MAX_POST_LINES)
@@ -679,12 +710,14 @@ def main() -> int:
     orthodox_ics = load_orthodox_ics(orthodox_path, orthodox_url, orthodox_allow_download)
     holidays = get_holidays(datetime.now(), orthodox_ics)
     traditions = get_traditions(datetime.now().date(), traditions_path)
+    history_event = get_historical_event(datetime.now().date(), history_path)
     news = get_news(rss_urls, limit=news_limit, title_max=news_title_max)
 
     prompt = build_prompt(
         weather,
         holidays,
         traditions,
+        history_event,
         news,
         max_post_chars,
         max_post_lines,
@@ -703,7 +736,7 @@ def main() -> int:
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     if not post.strip():
-        post = build_fallback_post(weather, holidays, traditions, news, datetime.now())
+        post = build_fallback_post(weather, holidays, traditions, history_event, news, datetime.now())
         post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
