@@ -36,6 +36,7 @@ QUIET_END = 6     # 06:00
 
 MORNING_HOUR = 6
 EVENING_HOUR = 20
+PARENT_NOTIFY_HOUR = 21
 
 ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 
@@ -61,16 +62,29 @@ def in_quiet_hours(ts: datetime) -> bool:
 
 def load_state() -> Dict[str, Any]:
     if not STATE_PATH.exists():
-        return {"profiles": {}, "pending": [], "last_update_id": 0}
+        state = {"profiles": {}, "pending": [], "last_update_id": 0}
+        ensure_family_settings(state)
+        return state
     try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        ensure_family_settings(state)
+        return state
     except Exception:
-        return {"profiles": {}, "pending": [], "last_update_id": 0}
+        state = {"profiles": {}, "pending": [], "last_update_id": 0}
+        ensure_family_settings(state)
+        return state
 
 
 def save_state(state: Dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def ensure_family_settings(state: Dict[str, Any]) -> Dict[str, Any]:
+    fs = state.setdefault("family_settings", {})
+    fs.setdefault("parent_ids", [])
+    fs.setdefault("notify_hour", PARENT_NOTIFY_HOUR)
+    return fs
 
 
 def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any]) -> None:
@@ -140,9 +154,14 @@ def load_facts() -> List[str]:
 
 
 def is_child_profile(profile: Dict[str, Any]) -> bool:
+    if profile.get("is_child") is True:
+        return True
+    if profile.get("is_child") is False:
+        return False
     role = (profile.get("role") or "").lower()
     age = profile.get("age")
-    return ("реб" in role) or (age is not None and age < 18)
+    child_markers = ["реб", "сын", "дочь", "мальчик", "девоч"]
+    return any(k in role for k in child_markers) or (age is not None and age < 18)
 
 
 def has_response_today(profile: Dict[str, Any], ts: datetime) -> bool:
@@ -172,11 +191,54 @@ def pick_fact(profile: Dict[str, Any]) -> Optional[str]:
     return facts[idx]
 
 
+def weekend_fact(profile: Dict[str, Any]) -> str:
+    fact = pick_fact(profile)
+    if fact:
+        return f"Интересный факт: {fact}"
+    return "Хочешь, я добавлю ещё фактов?"
+
+
+def weekend_idea(profile: Dict[str, Any]) -> str:
+    interests = [s.lower() for s in (profile.get("interests") or [])]
+    ideas_by_interest = {
+        "рис": ["Сделай рисунок природы или любимого героя.", "Попробуй нарисовать комикс из 3 кадров."],
+        "спорт": ["Поиграй в футбол или попрыгай со скакалкой.", "Сделай мини‑зарядку на 5 минут."],
+        "муз": ["Послушай новый жанр музыки и опиши, что понравилось.", "Попробуй подобрать простую мелодию."],
+        "чит": ["Прочитай главу книги и перескажи 3 интересных факта.", "Найди короткую статью про то, что тебе нравится."],
+        "робот": ["Собери или придумай маленький проект с роботами.", "Посмотри, как устроен простой датчик."],
+        "лего": ["Собери что‑то новое из LEGO и покажи фото.", "Попробуй построить мост, который выдержит груз."],
+    }
+    for key, ideas in ideas_by_interest.items():
+        if any(key in it for it in interests):
+            return random.choice(ideas)
+    generic = [
+        "Сходи на прогулку и сфотографируй что‑то необычное.",
+        "Сделай мини‑челлендж: 10 приседаний и 10 отжиманий (если можно).",
+        "Собери пазл или придумай настольную игру из подручных вещей.",
+    ]
+    return random.choice(generic)
+
+
+def notify_parents(token: str, state: Dict[str, Any], child_id: int, child_profile: Dict[str, Any], message: str) -> None:
+    parents = ensure_family_settings(state).get("parent_ids", [])
+    if not parents:
+        return
+    child_name = child_profile.get("name") or "Ребёнок"
+    for pid in parents:
+        try:
+            if int(pid) == int(child_id):
+                continue
+            send_message(token, int(pid), f"🔔 {child_name}: {message}", state)
+        except Exception:
+            pass
+
+
 def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     profiles = state.setdefault("profiles", {})
     return profiles.setdefault(str(user_id), {
         "name": "",
         "role": "",
+        "is_child": None,
         "age": None,
         "birthday": "",
         "grade": "",
@@ -188,6 +250,7 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
         "last_evening_prompt": "",
         "last_user_message_at": "",
         "last_fact_idx": None,
+        "last_parent_notify": "",
     })
 
 
@@ -239,8 +302,11 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
     text = normalize_text(text)
 
     if step == "role":
-        profile["role"] = text.lower()
-        if "реб" in profile["role"] or "д" in profile["role"]:
+        role_lower = text.lower()
+        profile["role"] = role_lower
+        child_markers = ["реб", "сын", "дочь", "мальчик", "девоч"]
+        profile["is_child"] = any(k in role_lower for k in child_markers)
+        if profile["is_child"]:
             set_awaiting(profile, "age")
             return "Сколько тебе лет?"
         set_awaiting(profile, "name")
@@ -296,6 +362,10 @@ def build_help() -> str:
         "/todo list — список дел\n"
         "/todo done <номер> — отметить выполненным\n"
         "/interest <что интересно> — указать интересы\n"
+        "/fact — интересный факт\n"
+        "/idea — идея для выходного\n"
+        "/parent — получать уведомления о детях (для взрослых)\n"
+        "/parent off — отключить уведомления\n"
         "/delete — удалить мои данные"
     )
 
@@ -340,6 +410,7 @@ def generate_zai_reply(user_text: str, is_child: bool) -> str:
 
 def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> str:
     profile["last_user_message_at"] = now_local().isoformat()
+    save_state(state)
     # onboarding
     if profile.get("awaiting"):
         resp = handle_onboarding(text, profile)
@@ -402,6 +473,38 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         save_state(state)
         return "Твои данные удалены."
 
+    if norm.startswith("/parent"):
+        if is_child_profile(profile):
+            return "Эта команда только для взрослых."
+        fs = ensure_family_settings(state)
+        parents = fs.get("parent_ids", [])
+        if "off" in norm:
+            if user_id in parents:
+                parents.remove(user_id)
+                save_state(state)
+            return "Уведомления отключены."
+        if user_id not in parents:
+            parents.append(user_id)
+            fs["parent_ids"] = parents
+            save_state(state)
+        return "Теперь вы будете получать уведомления о детях."
+
+    if norm.startswith("/fact"):
+        save_state(state)
+        return weekend_fact(profile)
+
+    if norm.startswith("/idea"):
+        save_state(state)
+        return weekend_idea(profile)
+
+    low = norm.lower()
+    if "факт" in low:
+        save_state(state)
+        return weekend_fact(profile)
+    if any(k in low for k in ["идея", "что делать", "чем заняться", "предложи"]):
+        save_state(state)
+        return weekend_idea(profile)
+
     # generic
     if not is_allowed(norm):
         return "Эту тему я не обсуждаю. Давай о чём‑то другом 🙂"
@@ -433,6 +536,8 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
     ts = now_local()
     today_str = ts.date().isoformat()
     is_weekend = ts.weekday() >= 5
+    fs = ensure_family_settings(state)
+    notify_hour = fs.get("notify_hour", PARENT_NOTIFY_HOUR)
 
     for uid, profile in state.get("profiles", {}).items():
         if not is_child_profile(profile):
@@ -457,6 +562,12 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
                     msg = "Напомню: я жду твоего ответа 🙂 Как прошёл день и какие планы на завтра?"
             send_message(token, chat_id, msg, state)
             profile["last_evening_prompt"] = today_str
+
+        # parent notify (once per day if no response)
+        if ts.hour == notify_hour and not responded_today and profile.get("last_parent_notify") != today_str:
+            if fs.get("parent_ids"):
+                notify_parents(token, state, int(uid), profile, "не ответил сегодня на сообщения")
+                profile["last_parent_notify"] = today_str
 
     save_state(state)
 
