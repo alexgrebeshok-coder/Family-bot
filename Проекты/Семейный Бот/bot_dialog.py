@@ -153,15 +153,28 @@ def load_facts() -> List[str]:
         return []
 
 
+def classify_role(text: str) -> Optional[bool]:
+    t = (text or "").lower()
+    adult_markers = ["мама", "пап", "отец", "мать", "бабуш", "дедуш", "дяд", "тет", "муж", "жена", "родител", "админ", "создател", "взросл", "опекун"]
+    child_markers = ["реб", "сын", "дочь", "мальчик", "девоч", "школьник", "дошкол"]
+    if any(k in t for k in adult_markers):
+        return False
+    if any(k in t for k in child_markers):
+        return True
+    return None
+
+
 def is_child_profile(profile: Dict[str, Any]) -> bool:
+    role = (profile.get("role") or "")
+    inferred = classify_role(role)
+    if inferred is not None:
+        return inferred
     if profile.get("is_child") is True:
         return True
     if profile.get("is_child") is False:
         return False
-    role = (profile.get("role") or "").lower()
     age = profile.get("age")
-    child_markers = ["реб", "сын", "дочь", "мальчик", "девоч"]
-    return any(k in role for k in child_markers) or (age is not None and age < 18)
+    return age is not None and age < 18
 
 
 def has_response_today(profile: Dict[str, Any], ts: datetime) -> bool:
@@ -302,15 +315,33 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
     text = normalize_text(text)
 
     if step == "role":
-        role_lower = text.lower()
-        profile["role"] = role_lower
-        child_markers = ["реб", "сын", "дочь", "мальчик", "девоч"]
-        profile["is_child"] = any(k in role_lower for k in child_markers)
-        if profile["is_child"]:
+        role_text = text
+        profile["role"] = role_text
+        inferred = classify_role(role_text)
+        if inferred is True:
+            profile["is_child"] = True
             set_awaiting(profile, "age")
             return "Сколько тебе лет?"
-        set_awaiting(profile, "name")
-        return "Как тебя зовут?"
+        if inferred is False:
+            profile["is_child"] = False
+            set_awaiting(profile, "name")
+            return "Как тебя зовут?"
+        set_awaiting(profile, "role_confirm")
+        return "Ты ребёнок или взрослый? (ответь: ребёнок/взрослый)"
+
+    if step == "role_confirm":
+        role_text = text
+        profile["role"] = role_text
+        inferred = classify_role(role_text)
+        if inferred is True:
+            profile["is_child"] = True
+            set_awaiting(profile, "age")
+            return "Сколько тебе лет?"
+        if inferred is False:
+            profile["is_child"] = False
+            set_awaiting(profile, "name")
+            return "Как тебя зовут?"
+        return "Пожалуйста, ответь: ребёнок или взрослый."
 
     if step == "age":
         m = re.search(r"\d+", text)
