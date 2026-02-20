@@ -231,29 +231,41 @@ def cancel_keyboard() -> dict:
     }
 
 
+def delete_confirm_keyboard() -> dict:
+    return {
+        "keyboard": [[{"text": "Да, удалить"}], [{"text": "Отмена"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
 def main_menu_keyboard(profile: Dict[str, Any]) -> dict:
     audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
     if audience == "child":
         keyboard = [
             [{"text": "Моё расписание"}, {"text": "Добавить в расписание"}],
             [{"text": "Мои дела"}, {"text": "Добавить дело"}],
-            [{"text": "Интересный факт"}, {"text": "Идея на выходной"}],
-            [{"text": "Напоминание"}, {"text": "Дни рождения"}],
-            [{"text": "Указать ДР"}, {"text": "Помощь"}],
+            [{"text": "Отметить дело"}, {"text": "Интересный факт"}],
+            [{"text": "Идея на выходной"}, {"text": "Напоминание"}],
+            [{"text": "Дни рождения"}, {"text": "Указать ДР"}],
+            [{"text": "Помощь"}, {"text": "Удалить мои данные"}],
         ]
     elif audience == "grandma":
         keyboard = [
-            [{"text": "Напоминание"}, {"text": "Дни рождения"}],
-            [{"text": "Указать ДР"}, {"text": "Помощь"}],
+            [{"text": "Напоминание"}, {"text": "Мои напоминания"}],
+            [{"text": "Дни рождения"}, {"text": "Указать ДР"}],
+            [{"text": "Помощь"}, {"text": "Удалить мои данные"}],
         ]
     else:
         keyboard = [
             [{"text": "Список покупок"}, {"text": "Добавить в список"}],
+            [{"text": "Отметить в списке"}, {"text": "Очистить список"}],
             [{"text": "Расписание"}, {"text": "Добавить в расписание"}],
             [{"text": "Мои дела"}, {"text": "Добавить дело"}],
-            [{"text": "Напоминание"}, {"text": "Мои напоминания"}],
-            [{"text": "Дни рождения"}, {"text": "Указать ДР"}],
-            [{"text": "Помощь"}],
+            [{"text": "Отметить дело"}, {"text": "Напоминание"}],
+            [{"text": "Мои напоминания"}, {"text": "Дни рождения"}],
+            [{"text": "Указать ДР"}, {"text": "Помощь"}],
+            [{"text": "Удалить мои данные"}],
         ]
     return {"keyboard": keyboard, "resize_keyboard": True}
 
@@ -945,6 +957,15 @@ def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any
         save_state(state)
         return with_menu(resp, profile)
 
+    if step == "delete_confirm":
+        low = text.lower()
+        if "удал" in low or "да" in low:
+            state["profiles"].pop(str(user_id), None)
+            save_state(state)
+            return ("Твои данные удалены. Нажми «Начать ✨».", start_keyboard())
+        set_awaiting(profile, "")
+        return with_menu("Удаление отменено.", profile)
+
     set_awaiting(profile, "")
     return with_menu("Готово.", profile)
 
@@ -978,6 +999,7 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         "schedule_add",
         "todo_add",
         "todo_done",
+        "delete_confirm",
     }
 
     if step in onboarding_steps:
@@ -993,8 +1015,17 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
     low = norm.lower()
 
     # soft menu triggers
-    if low in {"меню", "menu", "начать", "start"}:
+    if low in {"меню", "menu"}:
         return ("Вот меню:", main_menu_keyboard(profile))
+    if low in {"начать", "start"}:
+        if profile.get("audience") or profile.get("name"):
+            return ("Вот меню:", main_menu_keyboard(profile))
+        set_awaiting(profile, "role")
+        return (
+            "Привет! Я семейный помощник 😊\n"
+            "Подскажи, кто ты в семье? (ребёнок/взрослый/бабушка)",
+            role_keyboard(),
+        )
 
     if norm.startswith("/start"):
         set_awaiting(profile, "start_confirm")
@@ -1065,6 +1096,9 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
             parents.remove(user_id)
             save_state(state)
         return with_menu("Уведомления отключены.", profile)
+    if low in {"удалить мои данные", "удалить данные", "сбросить данные", "стереть данные"}:
+        set_awaiting(profile, "delete_confirm")
+        return ("Точно удалить ваши данные?", delete_confirm_keyboard())
 
     if norm.startswith("/schedule add"):
         item = norm.replace("/schedule add", "").strip()
@@ -1183,9 +1217,9 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         return "Сохранил день рождения."
 
     if norm.startswith("/delete"):
-        state["profiles"].pop(str(user_id), None)
+        set_awaiting(profile, "delete_confirm")
         save_state(state)
-        return "Твои данные удалены."
+        return ("Точно удалить ваши данные?", delete_confirm_keyboard())
 
     if norm.startswith("/parent"):
         if is_child_profile(profile):
