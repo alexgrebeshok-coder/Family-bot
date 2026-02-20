@@ -643,6 +643,7 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
         "schedule": [],
         "todos": [],
         "awaiting": "",
+        "pending_list_name": "",
         "last_morning_prompt": "",
         "last_evening_prompt": "",
         "last_user_message_at": "",
@@ -839,6 +840,20 @@ def with_menu(text: str, profile: Dict[str, Any]) -> tuple[str, dict]:
     return text, main_menu_keyboard(profile)
 
 
+def extract_json(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    chunk = text[start:end + 1]
+    try:
+        return json.loads(chunk)
+    except Exception:
+        return None
+
+
 def _fallback_reply() -> str:
     return "Я здесь 🙂 Напиши, что нужно, или нажми «Меню»."
 
@@ -882,6 +897,46 @@ def generate_openrouter_reply(user_text: str, audience: str) -> Optional[str]:
         msg = data["choices"][0]["message"]["content"]
         msg = str(msg).strip() if msg is not None else ""
         return msg or None
+    except Exception:
+        return None
+
+
+def generate_openrouter_intent(user_text: str, audience: str) -> Optional[dict]:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
+    system = (
+        "Ты парсер действий семейного бота. Верни СТРОГО JSON без текста. "
+        "Поля: intent (строка), list_name, item, items (массив), index (число), "
+        "when (в формате HH:MM или DD.MM HH:MM или YYYY-MM-DD HH:MM), text, date (ДД.ММ), reply. "
+        "Допустимые intent: menu, list_add, list_show, list_done, list_clear, todo_add, todo_list, todo_done, "
+        "schedule_add, schedule_show, reminder_add, reminder_list, reminder_delete, birthday_set, birthdays, "
+        "fact, idea, enable_notifications, disable_notifications, delete_profile, none. "
+        "Если пользователь просит интернет‑поиск/ссылки — intent=none и reply: 'Поиск в интернете сейчас отключён. '. "
+        "Если не уверен — intent=none и reply с уточнением."
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 180,
+    }
+    try:
+        r = requests.post(
+            OPENROUTER_API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        msg = data["choices"][0]["message"]["content"]
+        msg = str(msg).strip() if msg is not None else ""
+        return extract_json(msg)
     except Exception:
         return None
 
@@ -950,6 +1005,10 @@ def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any
 
     if step == "list_add":
         list_name, item = parse_list_add(text)
+        pending = profile.get("pending_list_name")
+        if pending and list_name == DEFAULT_LIST_NAME:
+            list_name = ensure_list_name(pending)
+        profile["pending_list_name"] = ""
         if not item:
             return ("Напишите, что добавить (например: молоко или продукты | молоко).", cancel_keyboard())
         add_shared_item(state, list_name, item, user_id)
@@ -959,6 +1018,10 @@ def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any
 
     if step == "list_done":
         list_name, idx = parse_list_done(text)
+        pending = profile.get("pending_list_name")
+        if pending and list_name == DEFAULT_LIST_NAME:
+            list_name = ensure_list_name(pending)
+        profile["pending_list_name"] = ""
         if not idx:
             return ("Напишите номер пункта (например: 2) или «продукты 2».", cancel_keyboard())
         ok = complete_shared_item(state, list_name, idx)
@@ -968,6 +1031,10 @@ def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any
 
     if step == "list_clear":
         name = ensure_list_name(text or DEFAULT_LIST_NAME)
+        pending = profile.get("pending_list_name")
+        if pending and name == DEFAULT_LIST_NAME:
+            name = ensure_list_name(pending)
+        profile["pending_list_name"] = ""
         removed = clear_shared_list(state, name, all_items=False)
         set_awaiting(profile, "")
         save_state(state)
@@ -1106,12 +1173,15 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
     if low in {"список покупок", "покупки", "список"}:
         return with_menu(format_shared_list(state, DEFAULT_LIST_NAME), profile)
     if low in {"добавить в список", "добавить список"}:
+        profile["pending_list_name"] = DEFAULT_LIST_NAME
         set_awaiting(profile, "list_add")
         return ("Что добавить в список?", cancel_keyboard())
     if low in {"отметить в списке", "сделал в списке"}:
+        profile["pending_list_name"] = DEFAULT_LIST_NAME
         set_awaiting(profile, "list_done")
         return ("Напишите номер пункта (например: 2).", cancel_keyboard())
     if low in {"очистить список", "убрать выполненное"}:
+        profile["pending_list_name"] = DEFAULT_LIST_NAME
         set_awaiting(profile, "list_clear")
         return ("Какой список очистить? (по умолчанию «покупки»)", cancel_keyboard())
     if low in {"напоминание", "напомни"}:
@@ -1161,6 +1231,140 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
     if low in {"удалить мои данные", "удалить данные", "сбросить данные", "стереть данные"}:
         set_awaiting(profile, "delete_confirm")
         return ("Точно удалить ваши данные?", delete_confirm_keyboard())
+
+    # LLM intent parsing (max use)
+    if not norm.startswith("/") and is_allowed(norm):
+        audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
+        intent_payload = generate_openrouter_intent(norm, audience)
+        if intent_payload:
+            intent = str(intent_payload.get("intent", "")).strip().lower()
+            if intent in {"none", ""}:
+                reply = intent_payload.get("reply")
+                if reply:
+                    return with_menu(reply, profile)
+            if intent == "menu":
+                return ("Вот меню:", main_menu_keyboard(profile))
+            if intent == "list_show":
+                name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
+                return with_menu(format_shared_list(state, name), profile)
+            if intent == "list_add":
+                name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
+                items = intent_payload.get("items")
+                item = intent_payload.get("item")
+                if items is None:
+                    items = [item] if item else []
+                items = [str(x).strip() for x in items if str(x).strip()]
+                if not items:
+                    profile["pending_list_name"] = name
+                    set_awaiting(profile, "list_add")
+                    return (f"Что добавить в список «{name}»?", cancel_keyboard())
+                for it in items:
+                    add_shared_item(state, name, it, user_id)
+                save_state(state)
+                return with_menu(f"Добавил в список «{name}»: {', '.join(items)}", profile)
+            if intent == "list_done":
+                name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
+                idx = intent_payload.get("index")
+                if not idx:
+                    profile["pending_list_name"] = name
+                    set_awaiting(profile, "list_done")
+                    return ("Напишите номер пункта (например: 2).", cancel_keyboard())
+                ok = complete_shared_item(state, name, int(idx))
+                save_state(state)
+                return with_menu("Готово!" if ok else "Не нашёл такой номер.", profile)
+            if intent == "list_clear":
+                name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
+                removed = clear_shared_list(state, name, all_items=False)
+                save_state(state)
+                if removed:
+                    return with_menu(f"Убрал {removed} пункт(ов) из списка «{name}».", profile)
+                return with_menu(f"В списке «{name}» нечего убирать.", profile)
+            if intent == "todo_add":
+                item = (intent_payload.get("item") or intent_payload.get("text") or "").strip()
+                if not item:
+                    set_awaiting(profile, "todo_add")
+                    return ("Какое дело добавить?", cancel_keyboard())
+                add_todo(profile, item)
+                save_state(state)
+                return with_menu("Добавил дело.", profile)
+            if intent == "todo_list":
+                return with_menu(list_todos(profile), profile)
+            if intent == "todo_done":
+                idx = intent_payload.get("index")
+                if not idx:
+                    set_awaiting(profile, "todo_done")
+                    return ("Какой номер дела отметить?", cancel_keyboard())
+                resp = complete_todo(profile, int(idx))
+                save_state(state)
+                return with_menu(resp, profile)
+            if intent == "schedule_add":
+                item = (intent_payload.get("item") or intent_payload.get("text") or "").strip()
+                if not item:
+                    set_awaiting(profile, "schedule_add")
+                    return ("Напишите занятие для расписания.", cancel_keyboard())
+                add_schedule(profile, item)
+                save_state(state)
+                return with_menu("Добавил в расписание.", profile)
+            if intent == "schedule_show":
+                return with_menu(format_schedule(profile), profile)
+            if intent == "reminder_add":
+                when = (intent_payload.get("when") or "").strip()
+                message = (intent_payload.get("text") or intent_payload.get("item") or "").strip()
+                if not when or not message:
+                    set_awaiting(profile, "remind_input")
+                    return ("Напишите время и текст: 18:00 позвонить", cancel_keyboard())
+                dt, msg, err = parse_remind_args(f"{when} {message}", now_local())
+                if err:
+                    set_awaiting(profile, "remind_input")
+                    return (err, cancel_keyboard())
+                rid = add_reminder(state, user_id, dt, msg)
+                save_state(state)
+                return with_menu(f"Ок! Напомню {dt.strftime('%d.%m %H:%M')} (№{rid}).", profile)
+            if intent == "reminder_list":
+                return with_menu(list_reminders(state, user_id), profile)
+            if intent == "reminder_delete":
+                idx = intent_payload.get("index")
+                if not idx:
+                    return with_menu("Напишите номер напоминания.", profile)
+                removed = delete_reminder(state, user_id, int(idx))
+                save_state(state)
+                return with_menu("Удалил напоминание." if removed else "Не нашёл такой номер.", profile)
+            if intent == "birthday_set":
+                date_val = intent_payload.get("date") or intent_payload.get("item") or ""
+                dm = parse_daymonth(str(date_val))
+                if not dm:
+                    set_awaiting(profile, "birthday_set")
+                    return ("Напишите дату в формате ДД.ММ (например, 09.03).", cancel_keyboard())
+                profile["birthday"] = f"{dm[0]:02d}.{dm[1]:02d}"
+                save_state(state)
+                return with_menu("Сохранил день рождения.", profile)
+            if intent == "birthdays":
+                return with_menu(list_birthdays(state), profile)
+            if intent == "fact":
+                return with_menu(weekend_fact(profile), profile)
+            if intent == "idea":
+                return with_menu(weekend_idea(profile), profile)
+            if intent == "enable_notifications":
+                if is_child_profile(profile):
+                    return with_menu("Эта функция только для взрослых.", profile)
+                fs = ensure_family_settings(state)
+                parents = fs.get("parent_ids", [])
+                if user_id not in parents:
+                    parents.append(user_id)
+                    fs["parent_ids"] = parents
+                    save_state(state)
+                return with_menu("Уведомления включены.", profile)
+            if intent == "disable_notifications":
+                fs = ensure_family_settings(state)
+                parents = fs.get("parent_ids", [])
+                if user_id in parents:
+                    parents.remove(user_id)
+                    save_state(state)
+                return with_menu("Уведомления отключены.", profile)
+            if intent == "delete_profile":
+                if any(k in low for k in ["удал", "стер", "сброс"]):
+                    set_awaiting(profile, "delete_confirm")
+                    return ("Точно удалить ваши данные?", delete_confirm_keyboard())
 
     if norm.startswith("/schedule add"):
         item = norm.replace("/schedule add", "").strip()
