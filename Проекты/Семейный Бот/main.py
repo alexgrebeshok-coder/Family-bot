@@ -55,6 +55,13 @@ DEFAULT_MAX_POST_LINES = 8
 DEFAULT_ORTHODOX_ICAL_URL = "https://azbyka.ru/days/ics/calendar.ics"
 ORTHODOX_CACHE_TTL_HOURS = 12
 
+ENCOURAGING_PHRASES = [
+    "Пусть день будет спокойным 🙂",
+    "Хорошего дня и тепла в доме 💛",
+    "Пусть всё получится сегодня! ✨",
+    "Берегите себя и близких 🤍",
+]
+
 ORTHODOX_KEYWORDS = [
     "пасха",
     "воскресение христово",
@@ -133,6 +140,16 @@ def shorten_text(text: str, max_len: int) -> str:
     if len(cleaned) <= max_len:
         return cleaned
     return cleaned[: max_len - 1].rstrip() + "…"
+
+
+def pick_encouraging_phrase(today: date) -> str:
+    idx = today.toordinal() % len(ENCOURAGING_PHRASES)
+    return ENCOURAGING_PHRASES[idx]
+
+
+def format_weather_inline(weather: Dict[str, str]) -> str:
+    parts = [f"{city}: {desc}" for city, desc in weather.items()]
+    return " / ".join(parts)
 
 
 # -----------------------------
@@ -375,6 +392,27 @@ def build_prompt(
     ).strip()
 
 
+def build_fallback_post(
+    weather: Dict[str, str],
+    holidays: str,
+    news: List[str],
+    today: datetime,
+) -> str:
+    greeting = "Доброе утро, семья! ☀️" if 5 <= today.hour < 12 else "Привет, семья! 🙂"
+    weather_line = f"Погода: {format_weather_inline(weather)}"
+    holiday_line = f"Праздники: {holidays}"
+
+    lines: List[str] = [greeting, weather_line, holiday_line]
+    if news:
+        lines.append("Новости:")
+        lines.extend([f"• {n}" for n in news])
+    else:
+        lines.append("Новости: Сегодня без заметных местных новостей")
+
+    lines.append(pick_encouraging_phrase(today.date()))
+    return "\n".join(lines)
+
+
 def generate_post(prompt: str, api_key: str, model: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -485,6 +523,10 @@ def main() -> int:
     )
     post = generate_post(prompt, openrouter_key, model)
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
+
+    if not post.strip():
+        post = build_fallback_post(weather, holidays, news, datetime.now())
+        post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
     return 0
