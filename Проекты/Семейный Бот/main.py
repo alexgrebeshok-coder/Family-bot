@@ -15,7 +15,10 @@ import sys
 import json
 import textwrap
 import html
-from datetime import datetime
+import re
+import time
+from pathlib import Path
+from datetime import datetime, date
 from typing import Dict, List, Tuple
 
 import requests
@@ -45,6 +48,54 @@ HOLIDAYS_FIXED = {
     "11-04": "День народного единства",
 }
 
+DEFAULT_NEWS_LIMIT = 2
+DEFAULT_NEWS_TITLE_MAX = 90
+DEFAULT_MAX_POST_CHARS = 900
+DEFAULT_MAX_POST_LINES = 8
+DEFAULT_ORTHODOX_ICAL_URL = "https://azbyka.ru/days/ics/calendar.ics"
+ORTHODOX_CACHE_TTL_HOURS = 12
+
+ORTHODOX_KEYWORDS = [
+    "пасха",
+    "воскресение христово",
+    "рождество христово",
+    "крещение",
+    "богоявление",
+    "сретение",
+    "благовещение",
+    "вход господень",
+    "вознесение",
+    "троица",
+    "пятидесятниц",
+    "преображение",
+    "успение",
+    "покров",
+    "воздвижение",
+    "рождество пресвятой богородицы",
+    "введение во храм",
+]
+
+NEGATIVE_KEYWORDS = [
+    "погиб",
+    "смерт",
+    "дтп",
+    "убий",
+    "катастроф",
+    "взрыв",
+    "пожар",
+    "трагед",
+    "авари",
+    "криминал",
+    "жертв",
+    "ранен",
+    "войн",
+    "обстрел",
+    "скончал",
+    "умер",
+    "теракт",
+    "крах",
+]
+
 
 # -----------------------------
 # Utilities
@@ -61,6 +112,27 @@ def http_get(url: str, params: dict | None = None, timeout: int = 20) -> dict:
     r = requests.get(url, params=params, timeout=timeout)
     r.raise_for_status()
     return r.json()
+
+
+def get_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def normalize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def shorten_text(text: str, max_len: int) -> str:
+    cleaned = normalize_space(text)
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1].rstrip() + "…"
 
 
 # -----------------------------
@@ -113,34 +185,144 @@ def get_weather() -> Dict[str, str]:
 # Holidays
 # -----------------------------
 
-def get_holidays(today: datetime) -> str:
+def fetch_orthodox_ics(url: str) -> str:
+    cache_dir = Path(__file__).resolve().parent / "output"
+    cache_file = cache_dir / "orthodox_calendar.ics"
+    if cache_file.exists():
+        age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+        if age_hours < ORTHODOX_CACHE_TTL_HOURS:
+            return cache_file.read_text(encoding="utf-8", errors="replace")
+
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    text = r.content.decode("utf-8", errors="replace")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(text, encoding="utf-8")
+    return text
+
+
+def unfold_ics_lines(text: str) -> List[str]:
+    lines = text.splitlines()
+    out: List[str] = []
+    for line in lines:
+        if line.startswith((" ", "\t")) and out:
+            out[-1] += line[1:]
+        else:
+            out.append(line)
+    return out
+
+
+def parse_ics_events(lines: List[str]) -> List[Tuple[date, str]]:
+    events: List[Tuple[date, str]] = []
+    in_event = False
+    cur_date: date | None = None
+    cur_summary: str | None = None
+
+    for line in lines:
+        if line == "BEGIN:VEVENT":
+            in_event = True
+            cur_date = None
+            cur_summary = None
+            continue
+        if line == "END:VEVENT" and in_event:
+            if cur_date and cur_summary:
+                events.append((cur_date, cur_summary))
+            in_event = False
+            continue
+        if not in_event:
+            continue
+
+        if line.startswith("DTSTART"):
+            value = line.split(":", 1)[1].strip()
+            date_str = value[:8]
+            try:
+                cur_date = datetime.strptime(date_str, "%Y%m%d").date()
+            except ValueError:
+                cur_date = None
+        elif line.startswith("SUMMARY"):
+            cur_summary = line.split(":", 1)[1].strip()
+
+    return events
+
+
+def is_major_orthodox(summary: str) -> bool:
+    lowered = summary.lower()
+    return any(key in lowered for key in ORTHODOX_KEYWORDS)
+
+
+def get_orthodox_holidays(today: date, url: str) -> List[str]:
+    try:
+        text = fetch_orthodox_ics(url)
+        lines = unfold_ics_lines(text)
+        events = parse_ics_events(lines)
+        matches: List[str] = []
+        for dt, summary in events:
+            if dt == today and is_major_orthodox(summary):
+                matches.append(shorten_text(summary, 80))
+        # de-duplicate
+        seen = set()
+        deduped = []
+        for item in matches:
+            if item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        return deduped[:2]
+    except Exception:
+        return []
+
+
+def get_holidays(today: datetime, orthodox_url: str) -> str:
     """Return a holiday string or 'Сегодня обычный день'."""
     key = today.strftime("%m-%d")
-    holiday = HOLIDAYS_FIXED.get(key)
-    return holiday or "Сегодня обычный день"
+    items: List[str] = []
+    fixed = HOLIDAYS_FIXED.get(key)
+    if fixed:
+        items.append(fixed)
+
+    orthodox = get_orthodox_holidays(today.date(), orthodox_url)
+    if orthodox:
+        items.append(f"Православный: {orthodox[0]}")
+
+    if not items:
+        return "Сегодня обычный день"
+    return " / ".join(items[:2])
 
 
 # -----------------------------
 # News (RSS)
 # -----------------------------
 
-def get_news(rss_urls: List[str], limit: int = DEFAULT_NEWS_LIMIT) -> List[str]:
+def is_negative_news(title: str) -> bool:
+    lowered = title.lower()
+    return any(key in lowered for key in NEGATIVE_KEYWORDS)
+
+
+def get_news(
+    rss_urls: List[str],
+    limit: int = DEFAULT_NEWS_LIMIT,
+    title_max: int = DEFAULT_NEWS_TITLE_MAX,
+) -> List[str]:
     items: List[str] = []
+    scan_limit = max(limit * 3, limit)
     for url in rss_urls:
         if not url:
             continue
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:limit]:
+            for entry in feed.entries[:scan_limit]:
                 title = (entry.get("title") or "").strip()
-                if title:
-                    items.append(title)
+                if not title:
+                    continue
+                title = normalize_space(title)
+                if is_negative_news(title):
+                    continue
+                items.append(shorten_text(title, title_max))
         except Exception:
             continue
 
     # de-duplicate while preserving order
     seen = set()
-    deduped = []
+    deduped: List[str] = []
     for t in items:
         if t not in seen:
             seen.add(t)
@@ -152,21 +334,33 @@ def get_news(rss_urls: List[str], limit: int = DEFAULT_NEWS_LIMIT) -> List[str]:
 # LLM (Groq)
 # -----------------------------
 
-def build_prompt(weather: Dict[str, str], holidays: str, news: List[str]) -> str:
-    weather_lines = "\n".join([f"- {city}: {desc}" for city, desc in weather.items()])
-    news_lines = "\n".join([f"- {n}" for n in news]) if news else "- Сегодня без заметных местных новостей"
+def build_prompt(
+    weather: Dict[str, str],
+    holidays: str,
+    news: List[str],
+    max_chars: int,
+    max_lines: int,
+    news_limit: int,
+    news_title_max: int,
+) -> str:
+    weather_lines = "\n".join([f"• {city}: {desc}" for city, desc in weather.items()])
+    news_lines = "\n".join([f"• {n}" for n in news]) if news else "• Сегодня без заметных местных новостей"
 
     return textwrap.dedent(
         f"""
-        Ты — дружелюбный семейный помощник. Сделай краткую сводку дня на основе данных.
-        Тон: тёплый, заботливый. Используй эмодзи. Не пиши ничего лишнего, только текст поста.
+        Ты — семейный Telegram‑бот. Пиши очень коротко и тепло.
+        Ограничения: не больше {max_lines} строк и {max_chars} символов.
+        Никакой политики, тревожных тем и негатива.
 
-        Формат:
-        1) Приветствие + эмодзи
-        2) Погода (буллеты)
-        3) Праздники (1 строка)
-        4) Новости (1–3 буллета)
-        5) Короткая фраза на сегодня (1 строка, опционально)
+        Структура:
+        1) Приветствие + эмодзи (1 строка)
+        2) Погода: 3 коротких пункта (Сургут/Тюмень/Москва)
+        3) Праздники: 1 строка (максимум 2 праздника)
+        4) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
+        5) Короткая ободряющая фраза (1 строка)
+
+        Если новостей нет — оставь строку «Сегодня без заметных местных новостей».
+        Не добавляй ссылки и хэштеги.
 
         Данные:
         Погода:
@@ -194,8 +388,8 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.6,
-        "max_tokens": 500,
+        "temperature": 0.5,
+        "max_tokens": 220,
     }
 
     r = requests.post(OPENROUTER_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
@@ -204,11 +398,24 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
     return data["choices"][0]["message"]["content"].strip()
 
 
+def enforce_post_limits(text: str, max_chars: int, max_lines: int) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+    compact = "\n".join(lines)
+    if len(compact) <= max_chars:
+        return compact
+    trimmed = compact[:max_chars]
+    if "\n" in trimmed:
+        trimmed = trimmed.rsplit("\n", 1)[0].rstrip()
+    return trimmed
+
+
 # -----------------------------
 # Telegram
 # -----------------------------
 
-def split_text(text: str, max_len: int = 3900) -> List[str]:
+def split_text(text: str, max_len: int) -> List[str]:
     parts: List[str] = []
     remaining = text
     while remaining:
@@ -223,10 +430,10 @@ def split_text(text: str, max_len: int = 3900) -> List[str]:
     return parts
 
 
-def send_telegram(token: str, chat_id: str, text: str) -> None:
+def send_telegram(token: str, chat_id: str, text: str, max_len: int) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     safe_text = html.escape(text)
-    for chunk in split_text(safe_text):
+    for chunk in split_text(safe_text, max_len=max_len):
         payload = {
             "chat_id": chat_id,
             "text": chunk,
@@ -253,19 +460,33 @@ def main() -> int:
         return 1
 
     model = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
+    orthodox_url = os.getenv("ORTHODOX_ICAL_URL", DEFAULT_ORTHODOX_ICAL_URL)
+    max_post_chars = get_int_env("MAX_POST_CHARS", DEFAULT_MAX_POST_CHARS)
+    max_post_lines = get_int_env("MAX_POST_LINES", DEFAULT_MAX_POST_LINES)
+    news_limit = get_int_env("NEWS_MAX_ITEMS", DEFAULT_NEWS_LIMIT)
+    news_title_max = get_int_env("NEWS_TITLE_MAX", DEFAULT_NEWS_TITLE_MAX)
 
     rss_surgut = os.getenv("RSS_SURGUT", "").strip()
     rss_moscow = os.getenv("RSS_MOSCOW", "").strip()
     rss_urls = [rss_surgut, rss_moscow]
 
     weather = get_weather()
-    holidays = get_holidays(datetime.now())
-    news = get_news(rss_urls)
+    holidays = get_holidays(datetime.now(), orthodox_url)
+    news = get_news(rss_urls, limit=news_limit, title_max=news_title_max)
 
-    prompt = build_prompt(weather, holidays, news)
+    prompt = build_prompt(
+        weather,
+        holidays,
+        news,
+        max_post_chars,
+        max_post_lines,
+        news_limit,
+        news_title_max,
+    )
     post = generate_post(prompt, openrouter_key, model)
+    post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
-    send_telegram(tg_token, tg_chat, post)
+    send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
     return 0
 
 
