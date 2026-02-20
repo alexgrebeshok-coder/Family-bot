@@ -461,8 +461,8 @@ def build_prompt(
     news_limit: int,
     news_title_max: int,
 ) -> str:
-    weather_lines = "\n".join([f"• {city}: {desc}" for city, desc in weather.items()])
-    news_lines = "\n".join([f"• {n}" for n in news]) if news else "• Сегодня без заметных местных новостей"
+    weather_line = " / ".join([f"{city}: {desc}" for city, desc in weather.items()])
+    news_lines = "\n".join([f"Новость: {n}" for n in news]) if news else "Новости: Сегодня без заметных местных новостей"
     traditions_line = traditions if traditions else ""
     history_line = history_event if history_event else ""
 
@@ -472,21 +472,21 @@ def build_prompt(
         Ограничения: не больше {max_lines} строк и {max_chars} символов.
         Никакой политики, тревожных тем и негатива.
 
-        Структура:
-        1) Приветствие + эмодзи (1 строка)
-        2) Погода: 3 коротких пункта (Сургут/Тюмень/Москва)
-        3) Праздники: 1 строка (максимум 2 праздника; если нет — «Сегодня спокойный день»)
-        4) Традиции: 1 строка, если есть (Масленица/пост/русские традиции)
-        5) История: 1 строка, если есть (позитивное историческое событие)
-        6) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
+        Структура (каждая секция — отдельная строка, без склейки):
+        1) Приветствие + эмодзи
+        2) Погода: одной строкой «Погода: Сургут … / Тюмень … / Москва …»
+        3) Праздники: одной строкой. Если нет — строго «Праздники: Сегодня спокойный день»
+        4) Традиции: строка «Традиции: …», если есть (Масленица/пост/русские традиции)
+        5) История: строка «История: …», если есть (позитивное историческое событие)
+        6) Новости: 1–{news_limit} строк. Формат каждой строки — «Новость: …»
+           Если новостей нет — строка «Новости: Сегодня без заметных местных новостей»
         7) Короткая ободряющая фраза (1 строка)
 
-        Если новостей нет — оставь строку «Сегодня без заметных местных новостей».
-        Не добавляй ссылки и хэштеги.
+        Не добавляй ссылки и хэштеги. Не используй «•» в одной строке.
 
         Данные:
         Погода:
-        {weather_lines}
+        Погода: {weather_line}
 
         Праздники:
         {holidays}
@@ -621,6 +621,18 @@ def generate_post(
     return ""
 
 
+def normalize_post(text: str) -> str:
+    if not text:
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"Праздников\s+сегодня\s+нет\.?", "Праздники: Сегодня спокойный день", normalized, flags=re.IGNORECASE)
+    for label in ("Погода:", "Праздники:", "Традиции:", "История:", "Новости:", "Новость:", "Актировка:"):
+        normalized = re.sub(rf"(?<!\n){re.escape(label)}", f"\n{label}", normalized)
+    normalized = re.sub(r"\s•\s", "\n• ", normalized)
+    normalized = re.sub(r"\n{2,}", "\n", normalized).strip()
+    return normalized
+
+
 def enforce_post_limits(text: str, max_chars: int, max_lines: int) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > max_lines:
@@ -733,10 +745,12 @@ def main() -> int:
         zai_base,
         zai_thinking,
     )
+    post = normalize_post(post)
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
-    if not post.strip():
+    if not post.strip() or len(post.splitlines()) < 3:
         post = build_fallback_post(weather, holidays, traditions, history_event, news, datetime.now())
+        post = normalize_post(post)
         post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
