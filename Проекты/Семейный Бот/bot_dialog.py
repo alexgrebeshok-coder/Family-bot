@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import time
 from datetime import datetime, date, timedelta
@@ -28,6 +29,7 @@ from zoneinfo import ZoneInfo
 # -----------------------------
 TZ = ZoneInfo("Asia/Yekaterinburg")
 STATE_PATH = Path("data/family_state.json")
+FACTS_PATH = Path("data/facts.json")
 
 QUIET_START = 22  # 22:00
 QUIET_END = 6     # 06:00
@@ -127,6 +129,49 @@ def is_allowed(text: str) -> bool:
     return not any(bad in lowered for bad in NEGATIVE_TOPICS)
 
 
+def load_facts() -> List[str]:
+    if not FACTS_PATH.exists():
+        return []
+    try:
+        data = json.loads(FACTS_PATH.read_text(encoding="utf-8"))
+        return [str(x).strip() for x in data if str(x).strip()]
+    except Exception:
+        return []
+
+
+def is_child_profile(profile: Dict[str, Any]) -> bool:
+    role = (profile.get("role") or "").lower()
+    age = profile.get("age")
+    return ("реб" in role) or (age is not None and age < 18)
+
+
+def has_response_today(profile: Dict[str, Any], ts: datetime) -> bool:
+    last = profile.get("last_user_message_at")
+    if not last:
+        return False
+    try:
+        dt = datetime.fromisoformat(last)
+    except Exception:
+        return False
+    return dt.date() == ts.date()
+
+
+def pick_fact(profile: Dict[str, Any]) -> Optional[str]:
+    facts = load_facts()
+    if not facts:
+        return None
+    last_idx = profile.get("last_fact_idx")
+    idx = random.randrange(len(facts))
+    if last_idx is not None and len(facts) > 1:
+        # try to avoid immediate repeat
+        for _ in range(3):
+            if idx != last_idx:
+                break
+            idx = random.randrange(len(facts))
+    profile["last_fact_idx"] = idx
+    return facts[idx]
+
+
 def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
     profiles = state.setdefault("profiles", {})
     return profiles.setdefault(str(user_id), {
@@ -141,6 +186,8 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
         "awaiting": "",
         "last_morning_prompt": "",
         "last_evening_prompt": "",
+        "last_user_message_at": "",
+        "last_fact_idx": None,
     })
 
 
@@ -292,6 +339,7 @@ def generate_zai_reply(user_text: str, is_child: bool) -> str:
 
 
 def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> str:
+    profile["last_user_message_at"] = now_local().isoformat()
     # onboarding
     if profile.get("awaiting"):
         resp = handle_onboarding(text, profile)
@@ -358,7 +406,7 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
     if not is_allowed(norm):
         return "Эту тему я не обсуждаю. Давай о чём‑то другом 🙂"
 
-    is_child = ("реб" in (profile.get("role") or "")) or (profile.get("age") is not None and profile.get("age") < 18)
+    is_child = is_child_profile(profile)
     return generate_zai_reply(norm, is_child)
 
 
@@ -374,8 +422,11 @@ def evening_prompt(profile: Dict[str, Any]) -> str:
     return "Как прошёл день? Если что-то меняется в расписании на завтра — напиши."
 
 
-def weekend_prompt() -> str:
-    return "Хочешь интересный факт или идею для выходного?"
+def weekend_prompt(profile: Dict[str, Any]) -> str:
+    fact = pick_fact(profile)
+    if fact:
+        return f"Выходной! Интересный факт: {fact}\nА как тебе такое? Что удивило больше всего?"
+    return "Выходной! Хочешь интересный факт или идею для выходного?"
 
 
 def run_scheduler(token: str, state: Dict[str, Any]) -> None:
@@ -384,17 +435,29 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
     is_weekend = ts.weekday() >= 5
 
     for uid, profile in state.get("profiles", {}).items():
+        if not is_child_profile(profile):
+            continue
         chat_id = int(uid)
+        responded_today = has_response_today(profile, ts)
+
         # morning
         if ts.hour == MORNING_HOUR and profile.get("last_morning_prompt") != today_str:
-            msg = weekend_prompt() if is_weekend else morning_prompt(profile)
+            msg = weekend_prompt(profile) if is_weekend else morning_prompt(profile)
             send_message(token, chat_id, msg, state)
             profile["last_morning_prompt"] = today_str
-        # evening
+
+        # evening (re-ask if no response today)
         if ts.hour == EVENING_HOUR and profile.get("last_evening_prompt") != today_str:
-            msg = weekend_prompt() if is_weekend else evening_prompt(profile)
+            if is_weekend:
+                msg = weekend_prompt(profile)
+            else:
+                if responded_today:
+                    msg = evening_prompt(profile)
+                else:
+                    msg = "Напомню: я жду твоего ответа 🙂 Как прошёл день и какие планы на завтра?"
             send_message(token, chat_id, msg, state)
             profile["last_evening_prompt"] = today_str
+
     save_state(state)
 
 
