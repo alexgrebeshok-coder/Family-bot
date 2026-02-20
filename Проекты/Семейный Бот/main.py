@@ -139,6 +139,12 @@ NEGATIVE_KEYWORDS = [
     "эпидем",
     "ковид",
     "коронавирус",
+    "кровоизлия",
+    "инсульт",
+    "реанимац",
+    "санавиац",
+    "госпитал",
+    "тяжел",
     "крах",
 ]
 
@@ -700,12 +706,11 @@ def split_text(text: str, max_len: int) -> List[str]:
 
 def send_telegram(token: str, chat_id: str, text: str, max_len: int) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    safe_text = html.escape(text)
+    safe_text = text
     for chunk in split_text(safe_text, max_len=max_len):
         payload = {
             "chat_id": chat_id,
             "text": chunk,
-            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         r = requests.post(url, data=payload, timeout=20)
