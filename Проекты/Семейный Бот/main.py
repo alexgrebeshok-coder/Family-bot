@@ -34,8 +34,8 @@ CITIES = {
     "Москва": (55.75, 37.62),
 }
 
-DEFAULT_NEWS_LIMIT = 3
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+ZAI_API_BASE_DEFAULT = "https://open.bigmodel.cn/api/paas/v4"
 
 HOLIDAYS_FIXED = {
     "01-01": "Новый год",
@@ -413,7 +413,24 @@ def build_fallback_post(
     return "\n".join(lines)
 
 
-def generate_post(prompt: str, api_key: str, model: str) -> str:
+def extract_message_content(data: dict) -> str:
+    try:
+        msg = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    content = msg.get("content") or ""
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text") or "")
+            elif isinstance(part, str):
+                parts.append(part)
+        content = "".join(parts)
+    return str(content).strip()
+
+
+def generate_openrouter_post(prompt: str, api_key: str, model: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -432,8 +449,49 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
 
     r = requests.post(OPENROUTER_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
     r.raise_for_status()
-    data = r.json()
-    return data["choices"][0]["message"]["content"].strip()
+    return extract_message_content(r.json())
+
+
+def generate_zai_post(prompt: str, api_key: str, model: str, base_url: str) -> str:
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.5,
+        "max_tokens": 220,
+    }
+
+    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+    r.raise_for_status()
+    return extract_message_content(r.json())
+
+
+def generate_post(
+    prompt: str,
+    openrouter_key: str | None,
+    openrouter_model: str,
+    zai_key: str | None,
+    zai_model: str,
+    zai_base: str,
+) -> str:
+    if zai_key:
+        try:
+            return generate_zai_post(prompt, zai_key, zai_model, zai_base)
+        except Exception:
+            return ""
+    if openrouter_key:
+        try:
+            return generate_openrouter_post(prompt, openrouter_key, openrouter_model)
+        except Exception:
+            return ""
+    return ""
 
 
 def enforce_post_limits(text: str, max_chars: int, max_lines: int) -> str:
@@ -492,12 +550,19 @@ def main() -> int:
     try:
         tg_token = require_env("TELEGRAM_BOT_TOKEN")
         tg_chat = require_env("TELEGRAM_CHAT_ID")
-        openrouter_key = require_env("OPENROUTER_API_KEY")
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         return 1
 
-    model = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    zai_key = os.getenv("ZAI_API_KEY")
+    if not zai_key and not openrouter_key:
+        print("Missing required env var: ZAI_API_KEY or OPENROUTER_API_KEY", file=sys.stderr)
+        return 1
+
+    openrouter_model = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
+    zai_model = os.getenv("ZAI_MODEL", "glm-4.7")
+    zai_base = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
     orthodox_url = os.getenv("ORTHODOX_ICAL_URL", DEFAULT_ORTHODOX_ICAL_URL)
     max_post_chars = get_int_env("MAX_POST_CHARS", DEFAULT_MAX_POST_CHARS)
     max_post_lines = get_int_env("MAX_POST_LINES", DEFAULT_MAX_POST_LINES)
@@ -521,7 +586,14 @@ def main() -> int:
         news_limit,
         news_title_max,
     )
-    post = generate_post(prompt, openrouter_key, model)
+    post = generate_post(
+        prompt,
+        openrouter_key,
+        openrouter_model,
+        zai_key,
+        zai_model,
+        zai_base,
+    )
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     if not post.strip():
