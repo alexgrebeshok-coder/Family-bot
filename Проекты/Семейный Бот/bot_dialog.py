@@ -847,7 +847,7 @@ def generate_openrouter_reply(user_text: str, audience: str) -> Optional[str]:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return None
-    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
     system = (
         "Ты семейный помощник в личных сообщениях. "
         "Отвечай коротко, дружелюбно и безопасно. "
