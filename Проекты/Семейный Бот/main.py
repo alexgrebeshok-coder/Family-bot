@@ -452,7 +452,13 @@ def generate_openrouter_post(prompt: str, api_key: str, model: str) -> str:
     return extract_message_content(r.json())
 
 
-def generate_zai_post(prompt: str, api_key: str, model: str, base_url: str) -> str:
+def generate_zai_post(
+    prompt: str,
+    api_key: str,
+    model: str,
+    base_url: str,
+    thinking_mode: str,
+) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -467,6 +473,8 @@ def generate_zai_post(prompt: str, api_key: str, model: str, base_url: str) -> s
         "temperature": 0.5,
         "max_tokens": 220,
     }
+    if thinking_mode.lower() in {"disabled", "off", "no"}:
+        payload["thinking"] = {"type": "disabled"}
 
     r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
     r.raise_for_status()
@@ -480,10 +488,11 @@ def generate_post(
     zai_key: str | None,
     zai_model: str,
     zai_base: str,
+    zai_thinking: str,
 ) -> str:
     if zai_key:
         try:
-            return generate_zai_post(prompt, zai_key, zai_model, zai_base)
+            return generate_zai_post(prompt, zai_key, zai_model, zai_base, zai_thinking)
         except Exception:
             return ""
     if openrouter_key:
@@ -563,6 +572,7 @@ def main() -> int:
     openrouter_model = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
     zai_model = os.getenv("ZAI_MODEL", "glm-4.7")
     zai_base = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
+    zai_thinking = os.getenv("ZAI_THINKING", "disabled")
     orthodox_url = os.getenv("ORTHODOX_ICAL_URL", DEFAULT_ORTHODOX_ICAL_URL)
     max_post_chars = get_int_env("MAX_POST_CHARS", DEFAULT_MAX_POST_CHARS)
     max_post_lines = get_int_env("MAX_POST_LINES", DEFAULT_MAX_POST_LINES)
@@ -593,6 +603,7 @@ def main() -> int:
         zai_key,
         zai_model,
         zai_base,
+        zai_thinking,
     )
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
