@@ -18,7 +18,7 @@ import html
 import re
 import time
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Tuple
 
 import requests
@@ -53,13 +53,25 @@ DEFAULT_NEWS_TITLE_MAX = 90
 DEFAULT_MAX_POST_CHARS = 900
 DEFAULT_MAX_POST_LINES = 8
 DEFAULT_ORTHODOX_ICAL_URL = "https://azbyka.ru/days/ics/calendar.ics"
-ORTHODOX_CACHE_TTL_HOURS = 12
+DEFAULT_ORTHODOX_ICAL_PATH = "data/orthodox.ics"
+DEFAULT_TRADITIONS_PATH = "data/traditional_holidays.json"
+DEFAULT_ORTHODOX_ALLOW_DOWNLOAD = 0
 
 ENCOURAGING_PHRASES = [
     "Пусть день будет спокойным 🙂",
     "Хорошего дня и тепла в доме 💛",
     "Пусть всё получится сегодня! ✨",
     "Берегите себя и близких 🤍",
+]
+
+MASLENITSA_DAYS = [
+    ("Понедельник", "Встреча", "первые блины"),
+    ("Вторник", "Заигрыши", "прогулки и игры"),
+    ("Среда", "Лакомка", "угощения и блины"),
+    ("Четверг", "Разгуляй", "гулянья и веселье"),
+    ("Пятница", "Тёщины вечерки", "блины для тёщи"),
+    ("Суббота", "Золовкины посиделки", "семейные посиделки"),
+    ("Воскресенье", "Прощённое воскресенье", "попросить прощения"),
 ]
 
 ORTHODOX_KEYWORDS = [
@@ -152,6 +164,74 @@ def format_weather_inline(weather: Dict[str, str]) -> str:
     return " / ".join(parts)
 
 
+def orthodox_easter(year: int) -> date:
+    a = year % 4
+    b = year % 7
+    c = year % 19
+    d = (19 * c + 15) % 30
+    e = (2 * a + 4 * b - d + 34) % 7
+    month = (d + e + 114) // 31
+    day = ((d + e + 114) % 31) + 1
+    julian = date(year, month, day)
+    delta = year // 100 - year // 400 - 2
+    return julian + timedelta(days=delta)
+
+
+def maslenitsa_info(today: date) -> str:
+    easter = orthodox_easter(today.year)
+    great_lent_start = easter - timedelta(days=48)
+    maslenitsa_start = great_lent_start - timedelta(days=7)
+    maslenitsa_end = great_lent_start - timedelta(days=1)
+
+    if maslenitsa_start <= today <= maslenitsa_end:
+        idx = (today - maslenitsa_start).days
+        day_name, title, note = MASLENITSA_DAYS[idx]
+        extra = " С понедельника Великий пост." if idx >= 4 else ""
+        return f"Масленица — {title}: {note}.{extra}".strip()
+
+    if today == great_lent_start:
+        return "Начался Великий пост."
+    days_to_lent = (great_lent_start - today).days
+    if 0 < days_to_lent <= 3:
+        return f"С {great_lent_start.strftime('%d.%m')} начнётся Великий пост."
+
+    return ""
+
+
+def load_traditional_holidays(path: Path) -> List[dict]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
+
+def get_traditional_today(today: date, path: Path) -> str:
+    key = today.strftime("%m-%d")
+    for item in load_traditional_holidays(path):
+        if item.get("date") == key:
+            name = item.get("name") or ""
+            note = item.get("note") or ""
+            if note:
+                return f"{name}: {note}"
+            return name
+    return ""
+
+
+def get_traditions(today: date, path: Path) -> str:
+    maslenitsa = maslenitsa_info(today)
+    if maslenitsa:
+        return maslenitsa
+    fixed = get_traditional_today(today, path)
+    if fixed:
+        return fixed
+    return ""
+
+
 # -----------------------------
 # Weather
 # -----------------------------
@@ -202,19 +282,16 @@ def get_weather() -> Dict[str, str]:
 # Holidays
 # -----------------------------
 
-def fetch_orthodox_ics(url: str) -> str:
-    cache_dir = Path(__file__).resolve().parent / "output"
-    cache_file = cache_dir / "orthodox_calendar.ics"
-    if cache_file.exists():
-        age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
-        if age_hours < ORTHODOX_CACHE_TTL_HOURS:
-            return cache_file.read_text(encoding="utf-8", errors="replace")
-
+def load_orthodox_ics(path: Path, url: str, allow_download: bool) -> str:
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="replace")
+    if not allow_download or not url:
+        return ""
     r = requests.get(url, timeout=20)
     r.raise_for_status()
     text = r.content.decode("utf-8", errors="replace")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(text, encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
     return text
 
 
@@ -267,10 +344,11 @@ def is_major_orthodox(summary: str) -> bool:
     return any(key in lowered for key in ORTHODOX_KEYWORDS)
 
 
-def get_orthodox_holidays(today: date, url: str) -> List[str]:
+def get_orthodox_holidays(today: date, ics_text: str) -> List[str]:
+    if not ics_text:
+        return []
     try:
-        text = fetch_orthodox_ics(url)
-        lines = unfold_ics_lines(text)
+        lines = unfold_ics_lines(ics_text)
         events = parse_ics_events(lines)
         matches: List[str] = []
         for dt, summary in events:
@@ -288,7 +366,7 @@ def get_orthodox_holidays(today: date, url: str) -> List[str]:
         return []
 
 
-def get_holidays(today: datetime, orthodox_url: str) -> str:
+def get_holidays(today: datetime, ics_text: str) -> str:
     """Return a holiday string or 'Сегодня обычный день'."""
     key = today.strftime("%m-%d")
     items: List[str] = []
@@ -296,12 +374,12 @@ def get_holidays(today: datetime, orthodox_url: str) -> str:
     if fixed:
         items.append(fixed)
 
-    orthodox = get_orthodox_holidays(today.date(), orthodox_url)
+    orthodox = get_orthodox_holidays(today.date(), ics_text)
     if orthodox:
         items.append(f"Православный: {orthodox[0]}")
 
     if not items:
-        return "Сегодня обычный день"
+        return "Сегодня спокойный день"
     return " / ".join(items[:2])
 
 
@@ -354,6 +432,7 @@ def get_news(
 def build_prompt(
     weather: Dict[str, str],
     holidays: str,
+    traditions: str,
     news: List[str],
     max_chars: int,
     max_lines: int,
@@ -362,6 +441,7 @@ def build_prompt(
 ) -> str:
     weather_lines = "\n".join([f"• {city}: {desc}" for city, desc in weather.items()])
     news_lines = "\n".join([f"• {n}" for n in news]) if news else "• Сегодня без заметных местных новостей"
+    traditions_line = traditions if traditions else ""
 
     return textwrap.dedent(
         f"""
@@ -373,8 +453,9 @@ def build_prompt(
         1) Приветствие + эмодзи (1 строка)
         2) Погода: 3 коротких пункта (Сургут/Тюмень/Москва)
         3) Праздники: 1 строка (максимум 2 праздника)
-        4) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
-        5) Короткая ободряющая фраза (1 строка)
+        4) Традиции: 1 строка, если есть (Масленица/пост/русские традиции)
+        5) Новости: 1–{news_limit} очень коротких пункта (≤ {news_title_max} символов)
+        6) Короткая ободряющая фраза (1 строка)
 
         Если новостей нет — оставь строку «Сегодня без заметных местных новостей».
         Не добавляй ссылки и хэштеги.
@@ -386,6 +467,9 @@ def build_prompt(
         Праздники:
         {holidays}
 
+        Традиции:
+        {traditions_line}
+
         Новости:
         {news_lines}
         """
@@ -395,6 +479,7 @@ def build_prompt(
 def build_fallback_post(
     weather: Dict[str, str],
     holidays: str,
+    traditions: str,
     news: List[str],
     today: datetime,
 ) -> str:
@@ -403,6 +488,9 @@ def build_fallback_post(
     holiday_line = f"Праздники: {holidays}"
 
     lines: List[str] = [greeting, weather_line, holiday_line]
+    if traditions:
+        lines.append(f"Традиции: {traditions}")
+
     if news:
         lines.append("Новости:")
         lines.extend([f"• {n}" for n in news])
@@ -574,6 +662,10 @@ def main() -> int:
     zai_base = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
     zai_thinking = os.getenv("ZAI_THINKING", "disabled")
     orthodox_url = os.getenv("ORTHODOX_ICAL_URL", DEFAULT_ORTHODOX_ICAL_URL)
+    orthodox_path = Path(os.getenv("ORTHODOX_ICAL_PATH", DEFAULT_ORTHODOX_ICAL_PATH))
+    orthodox_allow_download = os.getenv("ORTHODOX_ALLOW_DOWNLOAD", str(DEFAULT_ORTHODOX_ALLOW_DOWNLOAD)) == "1"
+    traditions_path = Path(os.getenv("TRADITIONS_PATH", DEFAULT_TRADITIONS_PATH))
+
     max_post_chars = get_int_env("MAX_POST_CHARS", DEFAULT_MAX_POST_CHARS)
     max_post_lines = get_int_env("MAX_POST_LINES", DEFAULT_MAX_POST_LINES)
     news_limit = get_int_env("NEWS_MAX_ITEMS", DEFAULT_NEWS_LIMIT)
@@ -584,12 +676,15 @@ def main() -> int:
     rss_urls = [rss_surgut, rss_moscow]
 
     weather = get_weather()
-    holidays = get_holidays(datetime.now(), orthodox_url)
+    orthodox_ics = load_orthodox_ics(orthodox_path, orthodox_url, orthodox_allow_download)
+    holidays = get_holidays(datetime.now(), orthodox_ics)
+    traditions = get_traditions(datetime.now().date(), traditions_path)
     news = get_news(rss_urls, limit=news_limit, title_max=news_title_max)
 
     prompt = build_prompt(
         weather,
         holidays,
+        traditions,
         news,
         max_post_chars,
         max_post_lines,
@@ -608,7 +703,7 @@ def main() -> int:
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     if not post.strip():
-        post = build_fallback_post(weather, holidays, news, datetime.now())
+        post = build_fallback_post(weather, holidays, traditions, news, datetime.now())
         post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
