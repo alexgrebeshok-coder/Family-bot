@@ -672,6 +672,14 @@ def normalize_post(text: str) -> str:
     return normalized
 
 
+def ensure_encouragement(text: str, today: date) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return text
+    lines[-1] = pick_encouraging_phrase(today)
+    return "\n".join(lines)
+
+
 def enforce_post_limits(text: str, max_chars: int, max_lines: int) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > max_lines:
@@ -785,10 +793,13 @@ def main() -> int:
     )
     post = normalize_post(post)
     post = enforce_post_limits(post, max_post_chars, max_post_lines)
+    post = ensure_encouragement(post, datetime.now().date())
+    post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     if not post.strip() or len(post.splitlines()) < 3:
         post = build_fallback_post(weather, holidays, traditions, history_event, news, datetime.now())
         post = normalize_post(post)
+        post = ensure_encouragement(post, datetime.now().date())
         post = enforce_post_limits(post, max_post_chars, max_post_lines)
 
     send_telegram(tg_token, tg_chat, post, max_len=max_post_chars)
