@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import textwrap
+import html
 from datetime import datetime
 from typing import Dict, List, Tuple
 
@@ -207,16 +208,33 @@ def generate_post(prompt: str, api_key: str, model: str) -> str:
 # Telegram
 # -----------------------------
 
+def split_text(text: str, max_len: int = 3900) -> List[str]:
+    parts: List[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            parts.append(remaining)
+            break
+        cut = remaining.rfind("\n", 0, max_len)
+        if cut == -1 or cut < max_len * 0.5:
+            cut = max_len
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    return parts
+
+
 def send_telegram(token: str, chat_id: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    r = requests.post(url, data=payload, timeout=20)
-    r.raise_for_status()
+    safe_text = html.escape(text)
+    for chunk in split_text(safe_text):
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        r = requests.post(url, data=payload, timeout=20)
+        r.raise_for_status()
 
 
 # -----------------------------
