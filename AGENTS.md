@@ -2,6 +2,30 @@
 
 This folder is home. Treat it that way.
 
+## Hard Context Guard (OpenClaw v2.1)
+
+This is mandatory for this workspace.
+
+1. When context usage reaches 50% or more:
+- Run compact immediately.
+- Use this summary format:
+  - task goals
+  - current state
+  - completed work
+  - blockers
+  - next 1-3 steps
+- Continue only from summary plus new messages.
+
+2. If context remains above 60% after compact:
+- Create a structured handoff summary.
+- Start a new session (`/new`).
+- Resume only from handoff summary.
+
+3. If context reaches 75% or more:
+- Do not start new fan-out.
+- Report `blocked_context`.
+- Rollover before accepting new parallel work.
+
 ## First Run
 
 If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
