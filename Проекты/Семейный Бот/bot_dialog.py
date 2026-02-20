@@ -88,15 +88,18 @@ def ensure_family_settings(state: Dict[str, Any]) -> Dict[str, Any]:
     return fs
 
 
-def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any]) -> None:
+def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any], reply_markup: Optional[dict] = None) -> None:
     ts = now_local()
     if in_quiet_hours(ts):
         # queue for morning
-        state.setdefault("pending", []).append({
+        item = {
             "chat_id": chat_id,
             "text": text,
             "send_after": (ts.replace(hour=QUIET_END, minute=0, second=0, microsecond=0) + timedelta(days=1 if ts.hour >= QUIET_START else 0)).isoformat(),
-        })
+        }
+        if reply_markup:
+            item["reply_markup"] = reply_markup
+        state.setdefault("pending", []).append(item)
         save_state(state)
         return
 
@@ -106,6 +109,8 @@ def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any]) -> 
         "text": text,
         "disable_web_page_preview": True,
     }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     r = requests.post(url, data=payload, timeout=20)
     r.raise_for_status()
 
@@ -126,7 +131,7 @@ def process_pending(token: str, state: Dict[str, Any]) -> None:
             send_after_dt = ts
         if send_after_dt <= ts:
             try:
-                send_message(token, int(item["chat_id"]), item["text"], state)
+                send_message(token, int(item["chat_id"]), item["text"], state, reply_markup=item.get("reply_markup"))
             except Exception:
                 remaining.append(item)
         else:
@@ -182,6 +187,25 @@ def update_profile_from_user(profile: Dict[str, Any], user: Dict[str, Any]) -> N
     profile["tg_first_name"] = user.get("first_name") or profile.get("tg_first_name") or ""
     profile["tg_last_name"] = user.get("last_name") or profile.get("tg_last_name") or ""
     profile["tg_username"] = user.get("username") or profile.get("tg_username") or ""
+
+
+def start_keyboard() -> dict:
+    return {
+        "keyboard": [[{"text": "Начать ✨"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def role_keyboard() -> dict:
+    return {
+        "keyboard": [
+            [{"text": "Ребёнок"}, {"text": "Взрослый"}],
+            [{"text": "Бабушка"}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
 
 
 def classify_audience(text: str) -> Optional[str]:
@@ -384,6 +408,17 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
     step = profile.get("awaiting", "")
     text = normalize_text(text)
 
+    if step == "start_confirm":
+        low = text.lower()
+        if "нач" in low or "/start" in low:
+            set_awaiting(profile, "role")
+            return (
+                "Привет! Я семейный помощник 😊\n"
+                "Подскажи, кто ты в семье? (ребёнок/взрослый/бабушка)",
+                role_keyboard(),
+            )
+        return "Нажми кнопку «Начать ✨»."
+
     if step == "role":
         role_text = text
         profile["role"] = role_text
@@ -562,11 +597,11 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
 
     norm = text.strip()
     if norm.startswith("/start"):
-        set_awaiting(profile, "role")
+        set_awaiting(profile, "start_confirm")
         save_state(state)
         return (
-            "Привет! Я семейный помощник 😊\n"
-            "Подскажи, кто ты в семье? (ребёнок/взрослый/бабушка)"
+            "Нажми «Начать ✨», и я задам пару вопросов.",
+            start_keyboard(),
         )
 
     if norm.startswith("/help"):
@@ -758,7 +793,11 @@ def main() -> int:
                 update_profile_from_user(profile, user)
                 response = handle_message(text, user_id, profile, state)
                 if response:
-                    send_message(token, user_id, response, state)
+                    reply_markup = None
+                    text_to_send = response
+                    if isinstance(response, tuple):
+                        text_to_send, reply_markup = response
+                    send_message(token, user_id, text_to_send, state, reply_markup=reply_markup)
 
             state["last_update_id"] = offset
             save_state(state)
