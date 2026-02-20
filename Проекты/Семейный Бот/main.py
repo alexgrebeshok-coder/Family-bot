@@ -35,7 +35,7 @@ CITIES = {
 }
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-ZAI_API_BASE_DEFAULT = "https://open.bigmodel.cn/api/paas/v4"
+ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 
 HOLIDAYS_FIXED = {
     "01-01": "Новый год",
