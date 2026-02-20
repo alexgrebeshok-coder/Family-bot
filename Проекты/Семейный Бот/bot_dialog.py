@@ -38,6 +38,7 @@ QUIET_END = 6     # 06:00
 MORNING_HOUR = 6
 EVENING_HOUR = 20
 PARENT_NOTIFY_HOUR = 21
+DEFAULT_LIST_NAME = "покупки"
 
 ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 
@@ -65,14 +66,20 @@ def load_state() -> Dict[str, Any]:
     if not STATE_PATH.exists():
         state = {"profiles": {}, "pending": [], "last_update_id": 0}
         ensure_family_settings(state)
+        ensure_lists(state)
+        ensure_reminders(state)
         return state
     try:
         state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
         ensure_family_settings(state)
+        ensure_lists(state)
+        ensure_reminders(state)
         return state
     except Exception:
         state = {"profiles": {}, "pending": [], "last_update_id": 0}
         ensure_family_settings(state)
+        ensure_lists(state)
+        ensure_reminders(state)
         return state
 
 
@@ -86,6 +93,14 @@ def ensure_family_settings(state: Dict[str, Any]) -> Dict[str, Any]:
     fs.setdefault("parent_ids", [])
     fs.setdefault("notify_hour", PARENT_NOTIFY_HOUR)
     return fs
+
+
+def ensure_lists(state: Dict[str, Any]) -> Dict[str, List[dict]]:
+    return state.setdefault("lists", {})
+
+
+def ensure_reminders(state: Dict[str, Any]) -> List[dict]:
+    return state.setdefault("reminders", [])
 
 
 def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any], reply_markup: Optional[dict] = None) -> None:
@@ -295,6 +310,236 @@ def weekend_idea(profile: Dict[str, Any]) -> str:
         "Собери пазл или придумай настольную игру из подручных вещей.",
     ]
     return random.choice(generic)
+
+
+def _next_reminder_id(reminders: List[dict]) -> int:
+    if not reminders:
+        return 1
+    return max(int(r.get("id", 0)) for r in reminders) + 1
+
+
+def _build_datetime(year: int, month: int, day: int, hour: int, minute: int) -> Optional[datetime]:
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=TZ)
+    except Exception:
+        return None
+
+
+def parse_remind_args(args: str, now: datetime) -> tuple[Optional[datetime], Optional[str], Optional[str]]:
+    args = args.strip()
+    if not args:
+        return None, None, "Формат: /remind 18:00 текст"
+
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s+(.+)", args)
+    if m:
+        y, mo, d, hh, mm, text = m.groups()
+        dt = _build_datetime(int(y), int(mo), int(d), int(hh), int(mm))
+        if not dt:
+            return None, None, "Неверная дата."
+        if dt <= now:
+            return None, None, "Эта дата уже прошла."
+        return dt, text.strip(), None
+
+    m = re.match(r"(\d{1,2})[./](\d{1,2})\s+(\d{1,2}):(\d{2})\s+(.+)", args)
+    if m:
+        d, mo, hh, mm, text = m.groups()
+        year = now.year
+        dt = _build_datetime(year, int(mo), int(d), int(hh), int(mm))
+        if not dt:
+            return None, None, "Неверная дата."
+        if dt <= now:
+            dt = _build_datetime(year + 1, int(mo), int(d), int(hh), int(mm))
+        return dt, text.strip(), None
+
+    m = re.match(r"(\d{1,2}):(\d{2})\s+(.+)", args)
+    if m:
+        hh, mm, text = m.groups()
+        dt = _build_datetime(now.year, now.month, now.day, int(hh), int(mm))
+        if not dt:
+            return None, None, "Неверное время."
+        if dt <= now:
+            dt = dt + timedelta(days=1)
+        return dt, text.strip(), None
+
+    return None, None, "Формат: /remind 18:00 текст или /remind 25.02 18:00 текст"
+
+
+def add_reminder(state: Dict[str, Any], chat_id: int, when: datetime, text: str) -> int:
+    reminders = ensure_reminders(state)
+    rid = _next_reminder_id(reminders)
+    reminders.append({
+        "id": rid,
+        "chat_id": int(chat_id),
+        "text": text,
+        "due_at": when.isoformat(),
+        "created_at": now_local().isoformat(),
+    })
+    return rid
+
+
+def list_reminders(state: Dict[str, Any], chat_id: int) -> str:
+    reminders = [r for r in ensure_reminders(state) if int(r.get("chat_id", 0)) == int(chat_id)]
+    if not reminders:
+        return "Напоминаний пока нет."
+    def _sort_key(r: dict):
+        try:
+            return datetime.fromisoformat(r.get("due_at", ""))
+        except Exception:
+            return now_local()
+    reminders.sort(key=_sort_key)
+    lines = []
+    for r in reminders[:20]:
+        try:
+            dt = datetime.fromisoformat(r.get("due_at", ""))
+            when = dt.strftime("%d.%m %H:%M")
+        except Exception:
+            when = "?"
+        lines.append(f"{r.get('id')}. {when} — {r.get('text')}")
+    return "Напоминания:\n" + "\n".join(lines)
+
+
+def delete_reminder(state: Dict[str, Any], chat_id: int, rid: int) -> bool:
+    reminders = ensure_reminders(state)
+    kept = []
+    removed = False
+    for r in reminders:
+        if int(r.get("chat_id", 0)) == int(chat_id) and int(r.get("id", -1)) == int(rid):
+            removed = True
+            continue
+        kept.append(r)
+    state["reminders"] = kept
+    return removed
+
+
+def process_reminders(token: str, state: Dict[str, Any]) -> None:
+    ts = now_local()
+    reminders = ensure_reminders(state)
+    if not reminders:
+        return
+    remaining = []
+    for r in reminders:
+        try:
+            due = datetime.fromisoformat(r.get("due_at", ""))
+        except Exception:
+            continue
+        if due <= ts:
+            try:
+                send_message(token, int(r.get("chat_id")), f"⏰ Напоминание: {r.get('text')}", state)
+            except Exception:
+                remaining.append(r)
+        else:
+            remaining.append(r)
+    state["reminders"] = remaining
+
+
+def parse_daymonth(value: str) -> Optional[tuple[int, int]]:
+    m = re.match(r"(\d{1,2})[./](\d{1,2})", value.strip())
+    if not m:
+        return None
+    day, month = int(m.group(1)), int(m.group(2))
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return None
+    return day, month
+
+
+def list_birthdays(state: Dict[str, Any]) -> str:
+    rel = load_relations()
+    entries: Dict[str, str] = {}
+    for child in rel.get("children", []):
+        name = child.get("name")
+        bday = child.get("birthday")
+        if name and bday:
+            entries[name] = bday
+    for prof in state.get("profiles", {}).values():
+        name = profile_name(prof)
+        bday = prof.get("birthday")
+        if name and bday:
+            entries[name] = bday
+    items = []
+    for name, bday in entries.items():
+        dm = parse_daymonth(bday)
+        if not dm:
+            continue
+        day, month = dm
+        items.append((month, day, name, bday))
+    if not items:
+        return "Пока нет дат дней рождения."
+    items.sort()
+    lines = [f"{bday} — {name}" for _, _, name, bday in items]
+    return "Дни рождения:\n" + "\n".join(lines)
+
+
+def ensure_list_name(name: str) -> str:
+    return name.strip() or DEFAULT_LIST_NAME
+
+
+def parse_list_add(args: str) -> tuple[str, Optional[str]]:
+    if not args:
+        return DEFAULT_LIST_NAME, None
+    if "|" in args:
+        list_name, item = args.split("|", 1)
+        return ensure_list_name(list_name), item.strip() or None
+    return DEFAULT_LIST_NAME, args.strip()
+
+
+def parse_list_done(args: str) -> tuple[str, Optional[int]]:
+    parts = args.split()
+    if not parts:
+        return DEFAULT_LIST_NAME, None
+    if parts[-1].isdigit():
+        idx = int(parts[-1])
+        name = " ".join(parts[:-1])
+        return ensure_list_name(name), idx
+    return DEFAULT_LIST_NAME, None
+
+
+def add_shared_item(state: Dict[str, Any], name: str, text: str, user_id: int) -> None:
+    lists = ensure_lists(state)
+    items = lists.setdefault(name, [])
+    items.append({"text": text, "done": False, "created": now_local().isoformat(), "by": int(user_id)})
+
+
+def complete_shared_item(state: Dict[str, Any], name: str, idx: int) -> bool:
+    items = ensure_lists(state).get(name, [])
+    if idx < 1 or idx > len(items):
+        return False
+    items[idx - 1]["done"] = True
+    return True
+
+
+def clear_shared_list(state: Dict[str, Any], name: str, all_items: bool = False) -> int:
+    lists = ensure_lists(state)
+    items = lists.get(name, [])
+    if not items:
+        return 0
+    if all_items:
+        removed = len(items)
+        lists[name] = []
+        return removed
+    remaining = [i for i in items if not i.get("done")]
+    removed = len(items) - len(remaining)
+    lists[name] = remaining
+    return removed
+
+
+def list_names(state: Dict[str, Any]) -> str:
+    lists = ensure_lists(state)
+    if not lists:
+        return "Пока нет списков. Добавьте: /list add продукты | молоко"
+    names = ", ".join(sorted(lists.keys()))
+    return f"Списки: {names}"
+
+
+def format_shared_list(state: Dict[str, Any], name: str) -> str:
+    lists = ensure_lists(state)
+    items = lists.get(name, [])
+    if not items:
+        return f"Список «{name}» пуст."
+    lines = []
+    for i, t in enumerate(items, 1):
+        mark = "✅" if t.get("done") else "⬜️"
+        lines.append(f"{mark} {i}. {t.get('text')}")
+    return f"Список «{name}»:\n" + "\n".join(lines)
 
 
 def _relations_parents_for(child_name: str, relations: Dict[str, Any]) -> List[str]:
@@ -535,6 +780,19 @@ def build_help() -> str:
         "/todo add <дело> — добавить дело\n"
         "/todo list — список дел\n"
         "/todo done <номер> — отметить выполненным\n"
+        "/list — общий список (по умолчанию «покупки»)\n"
+        "/list add <дело> — добавить в общий список\n"
+        "/list add список | дело — добавить в конкретный список\n"
+        "/list done <номер> — отметить в общем списке\n"
+        "/list done список <номер> — отметить в конкретном списке\n"
+        "/list clear — убрать выполненные\n"
+        "/list all — список списков\n"
+        "/remind 18:00 текст — напоминание на сегодня/завтра\n"
+        "/remind 25.02 18:00 текст — напоминание на дату\n"
+        "/remind list — список напоминаний\n"
+        "/remind delete <номер> — удалить напоминание\n"
+        "/birthdays — дни рождения\n"
+        "/birthday set 09.03 — сохранить свой день рождения\n"
         "/interest <что интересно> — указать интересы\n"
         "/fact — интересный факт\n"
         "/idea — идея для выходного\n"
@@ -645,6 +903,83 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         profile["interests"] = [s.strip() for s in item.split(",") if s.strip()]
         save_state(state)
         return "Записал интересы."
+
+    if norm.startswith("/list"):
+        args = norm.replace("/list", "", 1).strip()
+        if not args:
+            return format_shared_list(state, DEFAULT_LIST_NAME)
+        if args.startswith("all") or args.startswith("lists"):
+            return list_names(state)
+        if args.startswith("add"):
+            item_args = args.replace("add", "", 1).strip()
+            list_name, item = parse_list_add(item_args)
+            if not item:
+                return "Формат: /list add молоко или /list add продукты | молоко"
+            add_shared_item(state, list_name, item, user_id)
+            save_state(state)
+            return f"Добавил в список «{list_name}»."
+        if args.startswith("done"):
+            done_args = args.replace("done", "", 1).strip()
+            list_name, idx = parse_list_done(done_args)
+            if not idx:
+                return "Формат: /list done 2 или /list done продукты 2"
+            ok = complete_shared_item(state, list_name, idx)
+            save_state(state)
+            return "Готово!" if ok else "Не нашёл такой номер."
+        if args.startswith("clear"):
+            clear_args = args.replace("clear", "", 1).strip()
+            all_items = False
+            list_name = DEFAULT_LIST_NAME
+            if clear_args:
+                if clear_args.startswith("all"):
+                    all_items = True
+                    rest = clear_args.replace("all", "", 1).strip()
+                    if rest:
+                        list_name = ensure_list_name(rest)
+                else:
+                    list_name = ensure_list_name(clear_args)
+            removed = clear_shared_list(state, list_name, all_items=all_items)
+            save_state(state)
+            if removed:
+                return f"Убрал {removed} пункт(ов) из списка «{list_name}»."
+            return f"В списке «{list_name}» нечего убирать."
+        # treat as list name
+        return format_shared_list(state, args)
+
+    if norm.startswith("/remind"):
+        args = norm.replace("/remind", "", 1).strip()
+        if not args:
+            return "Формат: /remind 18:00 текст"
+        if args.startswith("list"):
+            return list_reminders(state, user_id)
+        if args.startswith("delete") or args.startswith("del") or args.startswith("cancel"):
+            m = re.search(r"\d+", args)
+            if not m:
+                return "Формат: /remind delete 2"
+            rid = int(m.group(0))
+            removed = delete_reminder(state, user_id, rid)
+            save_state(state)
+            return "Удалил напоминание." if removed else "Не нашёл такой номер."
+        dt, text, err = parse_remind_args(args, now_local())
+        if err:
+            return err
+        rid = add_reminder(state, user_id, dt, text)
+        save_state(state)
+        return f"Ок! Напомню {dt.strftime('%d.%m %H:%M')} (№{rid})."
+
+    if norm.startswith("/birthdays"):
+        return list_birthdays(state)
+
+    if norm.startswith("/birthday"):
+        args = norm.replace("/birthday", "", 1).strip()
+        if args.startswith("set"):
+            args = args.replace("set", "", 1).strip()
+        dm = parse_daymonth(args) if args else None
+        if not dm:
+            return "Формат: /birthday set 09.03"
+        profile["birthday"] = f"{dm[0]:02d}.{dm[1]:02d}"
+        save_state(state)
+        return "Сохранил день рождения."
 
     if norm.startswith("/delete"):
         state["profiles"].pop(str(user_id), None)
@@ -768,6 +1103,7 @@ def main() -> int:
         try:
             # scheduler & pending
             run_scheduler(token, state)
+            process_reminders(token, state)
             process_pending(token, state)
 
             url = f"https://api.telegram.org/bot{token}/getUpdates"
