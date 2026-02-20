@@ -948,9 +948,18 @@ def generate_zai_reply(user_text: str, audience: str) -> str:
         return reply or _fallback_reply()
     model = os.getenv("ZAI_MODEL", "glm-4.7")
     base_url = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
-    if "/coding/" in base_url:
-        base_url = ZAI_API_BASE_DEFAULT
-    url = base_url.rstrip("/") + "/chat/completions"
+
+    def alt_base(url: str) -> str:
+        if "/coding/" in url:
+            return url.replace("/coding", "")
+        if "/api/" in url:
+            return url.replace("/api/", "/api/coding/")
+        return url
+
+    base_candidates: list[str] = []
+    for b in [base_url, alt_base(base_url), ZAI_API_BASE_DEFAULT]:
+        if b and b not in base_candidates:
+            base_candidates.append(b)
 
     system = (
         "Ты семейный помощник в личных сообщениях. "
@@ -977,24 +986,26 @@ def generate_zai_reply(user_text: str, audience: str) -> str:
     thinking_mode = os.getenv("ZAI_THINKING", "")
     if thinking_mode.lower() in {"disabled", "off", "no"}:
         payload["thinking"] = {"type": "disabled"}
-    try:
-        r = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, data=json.dumps(payload), timeout=20)
-        if r.status_code == 429:
-            reply = generate_openrouter_reply(user_text, audience)
-            return reply or _fallback_reply()
-        r.raise_for_status()
-        data = r.json()
-        msg = data["choices"][0]["message"]["content"]
-        if isinstance(msg, list):
-            msg = "".join([p.get("text", "") for p in msg if isinstance(p, dict)])
-        msg = str(msg).strip() if msg is not None else ""
-        if not msg:
-            reply = generate_openrouter_reply(user_text, audience)
-            return reply or _fallback_reply()
-        return msg
-    except Exception:
-        reply = generate_openrouter_reply(user_text, audience)
-        return reply or _fallback_reply()
+
+    for base in base_candidates:
+        url = base.rstrip("/") + "/chat/completions"
+        try:
+            r = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, data=json.dumps(payload), timeout=20)
+            if r.status_code == 429:
+                continue
+            r.raise_for_status()
+            data = r.json()
+            msg = data["choices"][0]["message"]["content"]
+            if isinstance(msg, list):
+                msg = "".join([p.get("text", "") for p in msg if isinstance(p, dict)])
+            msg = str(msg).strip() if msg is not None else ""
+            if msg:
+                return msg
+        except Exception:
+            continue
+
+    reply = generate_openrouter_reply(user_text, audience)
+    return reply or _fallback_reply()
 
 
 def handle_menu_input(step: str, text: str, user_id: int, profile: Dict[str, Any], state: Dict[str, Any]) -> tuple[str, dict] | str:
