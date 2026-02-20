@@ -629,6 +629,13 @@ def normalize_post(text: str) -> str:
     for label in ("Погода:", "Праздники:", "Традиции:", "История:", "Новости:", "Новость:", "Актировка:"):
         normalized = re.sub(rf"(?<!\n){re.escape(label)}", f"\n{label}", normalized)
     normalized = re.sub(r"\s•\s", "\n• ", normalized)
+    # ensure encouragement is on its own line
+    normalized = re.sub(
+        r"(?<!\n)(Желаю|Хорошего|Пусть|Берегите|Всего доброго|Тёплого|Теплого)",
+        r"\n\1",
+        normalized,
+        flags=re.IGNORECASE,
+    )
     normalized = re.sub(r"\n{2,}", "\n", normalized).strip()
     return normalized
 
@@ -667,7 +674,7 @@ def split_text(text: str, max_len: int) -> List[str]:
 
 def send_telegram(token: str, chat_id: str, text: str, max_len: int) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    safe_text = html.escape(text)
+    safe_text = html.escape(text).replace("\n", "<br>")
     for chunk in split_text(safe_text, max_len=max_len):
         payload = {
             "chat_id": chat_id,
