@@ -7,6 +7,7 @@ Monitors the FamilyBot service and sends alerts to Telegram if issues are detect
 1. **LaunchAgent Status** - Verifies `com.openclaw.familybot.dialog` is loaded in launchctl
 2. **Process Running** - Confirms `bot_dialog.py` process is active
 3. **File Freshness** - Checks if `family_state.json` was updated recently (default: 120 min)
+   - Location: `/Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/data/family_state.json`
 4. **Log Errors** - Scans last 200 lines of `~/Library/Logs/familybot_dialog.log` for ERROR/Traceback
 
 ## Configuration

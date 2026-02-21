@@ -9,7 +9,7 @@ THRESHOLD_MIN=120
 LOG_DIR="/Users/aleksandrgrebeshok/.openclaw/workspace/logs"
 HEALTHCHECK_LOG="$LOG_DIR/familybot_healthcheck.log"
 BOT_LOG="$HOME/Library/Logs/familybot_dialog.log"
-FAMILY_STATE_PATH="$HOME/.openclaw/workspace/family_state.json"
+FAMILY_STATE_PATH="/Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/data/family_state.json"
 TELEGRAM_TARGET="1258992460"
 
 # Ensure log directory exists
