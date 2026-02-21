@@ -1,9 +1,30 @@
 # OpenClaw Watchdog - Implementation Report
 
+## TL;DR - Quick Reference
+
+```bash
+# Start/Stop watchdog (LaunchAgent)
+launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist   # Start
+launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist  # Stop
+
+# Check status
+launchctl list | grep openclaw    # Watchdog status
+openclaw gateway status           # Gateway status
+
+# View logs
+tail -f /Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
+
+# Manual run
+/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh
+
+# Rollback (git)
+cd /Users/aleksandrgrebeshok/.openclaw/workspace && git reset --hard HEAD~1
+```
+
 ## Что создано/изменено
 
 ### 1. Watchdog скрипт
-**Файл:** `/Users/aleksandrgrebeshok/.openclaw/workspace-quick-coder/ops/openclaw_watchdog.sh`
+**Файл:** `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh`
 
 **Функционал:**
 - Проверяет статус OpenClaw Gateway через `openclaw gateway status`
@@ -58,10 +79,10 @@ launchctl bootout gui/$UID/com.openclaw.watchdog
 
 ```bash
 # Запустить watchdog вручную
-/Users/aleksandrgrebeshok/.openclaw/workspace-quick-coder/ops/openclaw_watchdog.sh
+/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh
 
 # Проверить логи
-tail -f /Users/aleksandghrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
+tail -f /Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
 ```
 
 ### Симуляция сбоя gateway для тестирования
@@ -71,7 +92,7 @@ tail -f /Users/aleksandghrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
 openclaw gateway stop
 
 # Запустить watchdog вручную и наблюдать лог
-/Users/aleksandghrebeshok/.openclaw/workspace-quick-coder/ops/openclaw_watchdog.sh
+/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh
 ```
 
 ---
@@ -81,7 +102,7 @@ openclaw gateway stop
 ### 1. Откатить git изменения
 
 ```bash
-cd /Users/aleksandghrebeshok/.openclaw/workspace-quick-coder
+cd /Users/aleksandrgrebeshok/.openclaw/workspace
 
 # Удалить последний коммит (но сохранить изменения)
 git reset HEAD~1
@@ -110,15 +131,18 @@ launchctl kickstart -k gui/$(id -u)/com.openclaw.watchdog
 
 ```bash
 # Удалить скрипт
-rm /Users/aleksandghrebeshok/.openclaw/workspace-quick-coder/ops/openclaw_watchdog.sh
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh
+
+# Удалить README (по желанию)
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/ops/README_WATCHDOG.md
 
 # Удалить логи (по желанию)
-rm /Users/aleksandghrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
-rm /Users/aleksandghrebeshok/.openclaw/workspace/logs/openclaw_watchdog_stdout.log
-rm /Users/aleksandghrebeshok/.openclaw/workspace/logs/openclaw_watchdog_stderr.log
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog_stdout.log
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog_stderr.log
 
 # Удалить lockfile
-rm /Users/aleksandghrebeshok/.openclaw/workspace-quick-coder/ops/openclaw_watchdog.lock
+rm /Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock
 ```
 
 ---
