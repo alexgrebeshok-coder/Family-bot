@@ -209,15 +209,18 @@ NEGATIVE_TOPICS = [
 
 INTENT_PATTERNS = {
     "list_add": [
-        r"^(добавь|купи|нужн|надо|есть|взять)\s+.*?(в список|в покупки)?",
-        r"^(куп|покупк|продукт|еда|молоко|хлеб|масло|сахар|соль|яйцо)",
+        r"^(добавь|купи|нужн|надо|есть|взять|приобрести|принеси)\s+.*?(в список|в покупки)?",
+        r"^(куп|покупк|продукт|еда|молоко|хлеб|масло|сахар|соль|яйцо|сыр|колбаса)",
         r"^(надо купить|нужно купить|нужн(о|о) купить|куп(и|ить)\s+)",
-        r"^(в список|в список покупок)",
+        r"^(в список|в список покупок|запиши в список)",
         r"^(пок|продукт)\s*(в список|добавить)?",
+        r"^(запиши|напомни купить|не забудь купить)\s+",
+        r"^(надо в магазине|надо в магазин|надо(ся)? купить)\s+",
     ],
     "list_show": [
         r"^(что\s*(в|в\s*списке)|покажи\s*(список|что\s*есть)|какой\s*список)",
         r"^(список покупок|покупки|что купить)",
+        r"^(что\s*надо\s*купить|чего\s*не\s*хватает)",
     ],
     "list_done": [
         r"^(сделал|выполнил|зачеркн|отмет|убрал)\s+.*?(из списка)?",
@@ -226,28 +229,34 @@ INTENT_PATTERNS = {
         r"^(готово|сделано)\s+\d+",
     ],
     "todo_add": [
-        r"^(запиши|задач|дело|надо\s+сделать|надо\s+делать|нужно\s+сделать)",
-        r"^(сделать|выполнить|построить|приготовить|убрать|помыть|почистить)",
-        r"^(напомни\s+сделать|запомни\s+сделать)",
-        r"^(план\s+на\s+день|дела\s+на\s+день)",
+        r"^(запиши|задач|дело|надо\s+сделать|надо\s+делать|нужно\s+сделать|нужно\s+делать)",
+        r"^(сделать|выполнить|построить|приготовить|убрать|помыть|почистить|убраться|прибраться)",
+        r"^(напомни\s+сделать|запомни\s+сделать|не\s+забудь\s+сделать)",
+        r"^(план\s+на\s+день|дела\s+на\s+день|задачи\s+на\s+день)",
+        r"^(сделай|выполни|нужно|надо)\s+",
+        r"^(дела|задачи):\s+",
     ],
     "todo_list": [
-        r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела)",
-        r"^(покажи\s*дела|список\s*дел)",
+        r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела|какие\s*задачи)",
+        r"^(покажи\s*дела|список\s*дел|какие\s*дела\s*на\s*сегодня)",
+        r"^(что\s*надо\s+сделать|что\s*осталось\s+сделать)",
     ],
     "todo_done": [
-        r"^(сделал\s*дело|выполнил\s*дело|отметил\s*дело)",
-        r"^(дело\s*сделано|задача\s*выполнена)",
-        r"^(готово\s*дело)",
+        r"^(сделал\s*дело|выполнил\s*дело|отметил\s*дело|готово\s*дело)",
+        r"^(дело\s*сделано|задача\s*выполнена|задача\s*готова)",
+        r"^(выполнил\s*задачу|сделано\s*\d+|готово\s*\d+)",
     ],
     "schedule_add": [
         r"^(расписание|урок|занятие|кружок|секция)\s*(добавить|в\s+расписание)?",
-        r"^(пойду|иду|буду)\s+.*(в\s+)?(кружок|секцию|урок|школу)",
-        r"^(запиши\s+в\s+расписание|добавь\s+в\s+расписание)",
+        r"^(пойду|иду|буду|идём|поедем)\s+.*(в\s+)?(кружок|секцию|урок|школу|класс)",
+        r"^(запиши\s+в\s+расписание|добавь\s+в\s+расписание|в\s+расписание)",
+        r"^(есть\s+урок|будет\s+урок|иду\s+на\s+урок)\s+",
+        r"^(план\s+на\s+день|расписание\s+на\s+день)\s*:",
     ],
     "schedule_show": [
-        r"^(моё\s*расписание|расписание|какое\s*расписание)",
-        r"^(покажи\s*расписание|что\s*у\s*меня\s*по\s*расписанию)",
+        r"^(моё\s*расписание|расписание|какое\s*расписание|расписание\s+на\s+сегодня)",
+        r"^(покажи\s*расписание|что\s*у\s*меня\s*по\s*расписанию|что\s*завтра)",
+        r"^(уроки|занятия|кружки)\s+",
     ],
     "reminder_add": [
         r"^(напомни|напомн(и|ь)|запомни|не\s+забудь|поставь\s+напоминание)",
@@ -255,37 +264,40 @@ INTENT_PATTERNS = {
         r"^(в\s+\d+[.:]\d+|в\s+завтра|через\s+\d+)",
     ],
     "reminder_list": [
-        r"^(мои\s*напоминания|напоминания|какие\s*напоминания)",
-        r"^(покажи\s*напоминания)",
+        r"^(мои\s*напоминания|напоминания|какие\s*напоминания|какие\s*есть\s*напоминания)",
+        r"^(покажи\s*напоминания|список\s*напоминаний)",
     ],
     "birthday_set": [
         r"^(мой\s*др|мой\s*день\s*рождения|когда\s*у\s*меня\s*др|у\s*меня\s*др)",
-        r"^(день\s*рождения\s*у\s*меня|я\s*родился|родилась)",
+        r"^(день\s*рождения\s*у\s*меня|я\s*родился|родилась)\s*",
+        r"^(дата\s*рождения|др\s*у\s+меня)",
     ],
     "birthdays": [
         r"^(дни\s*рождения|когда\s*дни\s*рождения|у\s*кого\s*день\s*рождения)",
-        r"^(др\s*семьи|дни\s*рождения\s*семьи)",
+        r"^(др\s*семьи|дни\s*рождения\s*семьи|кто\s*родился)",
     ],
     "fact": [
         r"^(факт|интересный\s*факт|факт\s*дня|расскажи\s*факт)",
-        r"^(что\s*интересное|что\s*нового)",
+        r"^(что\s*интересное|что\s*нового|расскажи\s+что-нибудь)",
     ],
     "idea": [
         r"^(идея|идея\s*на\s*выходной|чем\s*заняться|что\s*делать)",
         r"^(предложи|подскажи|что\s*интересного\s*сделать)",
     ],
     "menu": [
-        r"^(меню|главное|главная|начало|главная\s*страница)",
+        r"^(меню|главное|главная|начало|главная\s*страница|старт|start)",
     ],
     "delete_profile": [
         r"^(удали\s*мои\s*данные|удалить\s*данные|стереть\s*данные|сбросить)",
-        r"^(удалить\s*профиль|сброс\s*профиля)",
+        r"^(удалить\s*профиль|сброс\s*профиля|стереть\s*профиль)",
     ],
     "enable_notifications": [
         r"^(хочу\s*уведомления|включи\s*уведомления|уведомляй\s*меня)",
+        r"^(включить\s+уведомления|включи\s+оповещения)",
     ],
     "disable_notifications": [
         r"^(не\s*хочу\s*уведомления|отключи\s*уведомления|без\s*уведомлений)",
+        r"^(отключить\s+уведомления|выключить\s+уведомления)",
     ],
 }
 
@@ -409,6 +421,27 @@ def process_pending(token: str, state: Dict[str, Any]) -> None:
 
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def generate_clarifying_question() -> str:
+    """Generate a random clarifying question to help guide users when intent is none."""
+    questions = [
+        "Хочешь добавить что-то в список покупок?",
+        "Может, нужно запомнить дело или напоминание?",
+        "Хочешь что-то добавить в расписание?",
+        "Интересный факт или идея на выходной?",
+        "Нужно показать дни рождения?",
+    ]
+    return random.choice(questions)
+
+
+def log_unrecognized_phrase(text: str) -> None:
+    """Log unrecognized phrases safely (only length + first word, no full text)."""
+    normalized = normalize_text(text)
+    words = normalized.split()
+    first_word = words[0] if words else ""
+    log_info = f"Unrecognized phrase: length={len(normalized)}, first_word='{first_word}'"
+    bot_logger.info(log_info)
 
 
 def is_allowed(text: str) -> bool:
@@ -900,6 +933,7 @@ def profile_for(state: Dict[str, Any], user_id: int) -> Dict[str, Any]:
         "last_user_message_at": "",
         "last_fact_idx": None,
         "last_parent_notify": "",
+        "menu_hints_shown": False,
         "tg_first_name": "",
         "tg_last_name": "",
         "tg_username": "",
@@ -1088,6 +1122,14 @@ def build_help() -> str:
 
 
 def with_menu(text: str, profile: Dict[str, Any]) -> tuple[str, dict]:
+    # Add menu hints for new users
+    if not profile.get("menu_hints_shown", False):
+        # Show hints only once per user
+        profile["menu_hints_shown"] = True
+        hints = "\n\n💡 Подсказка: можешь писать простыми словами, например:\n" \
+                "\"добавь хлеб\", \"напомни завтра в 15:00\", \"урок математики\""
+        text = f"{text}{hints}"
+
     return text, main_menu_keyboard(profile)
 
 
@@ -1127,12 +1169,28 @@ def detect_local_intent(text: str) -> Optional[dict]:
     if re.search(r"^(что\s*(в|в\s*списке)|покажи\s*(список|что\s*есть)|какой\s*список|список покупок|покупки|что купить)", t):
         return {"intent": "list_show"}
 
+    # Check for list_done (before list_add to avoid false positives)
+    if re.search(r"^(сделал|выполнил|зачеркн|отмет|убрал|купил|взял|куплено|взято|готово|сделано)\s*\d+", t):
+        m = re.search(r"(\d+)", t)
+        if m:
+            return {"intent": "list_done", "index": int(m.group(1))}
+
     # Check for todo_list (before todo_add)
-    if re.search(r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела|покажи\s*дела|список\s*дел)", t):
+    if re.search(r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела|покажи\s*дела|список\s*дел|какие\s*дела\s+на\s*сегодня|что\s*надо\s+сделать|что\s*осталось\s+сделать)", t):
         return {"intent": "todo_list"}
 
+    # Check for todo_add with "запиши" (before list_add to avoid false positives)
+    if re.search(r"^запиши\s+.*(вынести|убрать|помыть|почистить|приготовить|построить|сделать|выполнить)", t, re.IGNORECASE):
+        return {"intent": "todo_add", "item": normalize_text(re.sub(r"^запиши\s+", "", t))}
+
+    # Check for todo_done (before todo_add to avoid false positives)
+    if re.search(r"^(сделал\s*дело|выполнил\s*дело|отметил\s*дело|готово\s*дело|дело\s*сделано|задача\s*выполнена|задача\s*готова|выполнил\s*задачу|сделано\s*\d+|готово\s*\d+)\s*\d+", t):
+        m = re.search(r"(\d+)", t)
+        if m:
+            return {"intent": "todo_done", "index": int(m.group(1))}
+
     # Check for schedule_show (before schedule_add)
-    if re.search(r"^(моё\s*расписание|расписание|покажи\s*расписание|какое\s*расписание|что\s*у\s*меня\s*по\s*расписанию)", t):
+    if re.search(r"^(моё\s*расписание|расписание|покажи\s*расписание|какое\s*расписание|что\s*у\s*меня\s*по\s*расписанию|уроки|занятия|кружки)", t):
         return {"intent": "schedule_show"}
 
     # Check for reminder_list
@@ -1143,6 +1201,10 @@ def detect_local_intent(text: str) -> Optional[dict]:
     if re.search(r"^(дни\s*рождения|когда\s*дни\s*рождения|у\s*кого\s*день\s*рождения|др\s*семьи|дни\s*рождения\s*семьи)", t):
         return {"intent": "birthdays"}
 
+    # Check for idea before other patterns
+    if re.search(r"^(идея|идея\s*на\s+выходной|чем\s*заняться|что\s*делать|предложи|подскажи|что\s*интересного\s*сделать|как\s+провести\s+время)", t):
+        return {"intent": "idea"}
+
     # Iterate through intent patterns
     for intent_name, patterns in INTENT_PATTERNS.items():
         for pattern in patterns:
@@ -1152,12 +1214,39 @@ def detect_local_intent(text: str) -> Optional[dict]:
 
                     # Extract additional data based on intent
                     if intent_name == "list_add":
-                        # Simplified extraction: remove action words
+                        # Improved extraction: chain prefix removal with whitespace normalization
                         item_text = t
-                        for prefix in ["добавь", "купи", "нужно", "надо", "в список", "в покупки", "продукты", "продукт", "добавить", "взять", "есть"]:
-                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
-                        if item_text.strip():
-                            result["item"] = item_text.strip()
+                        # Chain of prefixes to remove (try longest first for better matching)
+                        prefixes = [
+                            r"^в\s+список\s+покупок\s*",
+                            r"^добавь\s+в\s+список\s*",
+                            r"^в\s+список\s*",
+                            r"^в\s+покупки\s*",
+                            r"^в\s+продукты\s*",
+                            r"^надо\s+в\s+магазине\s*",
+                            r"^надо\s+в\s+магазин\s*",
+                            r"^надо\s+купить\s*",
+                            r"^нужно\s+купить\s*",
+                            r"^надося\s+купить\s*",
+                            r"^запиши\s+в\s+список\s*",
+                            r"^напомни\s+купить\s*",
+                            r"^не\s+забудь\s+купить\s*",
+                            r"^приобрести\s*",
+                            r"^принеси\s*",
+                            r"^добавить\s*",
+                            r"^добавь\s*",
+                            r"^купить\s*",
+                            r"^купи\s*",
+                            r"^взять\s*",
+                            r"^есть\s*",
+                            r"^надо\s*",
+                            r"^нужно\s*",
+                        ]
+                        for prefix in prefixes:
+                            item_text = re.sub(prefix, "", item_text, flags=re.IGNORECASE)
+                        item_text = normalize_text(item_text)
+                        if item_text:
+                            result["item"] = item_text
 
                     elif intent_name == "list_done":
                         # Extract index: "сделал 2" → index=2
@@ -1166,12 +1255,44 @@ def detect_local_intent(text: str) -> Optional[dict]:
                             result["index"] = int(m.group(1))
 
                     elif intent_name == "todo_add":
-                        # Simplified extraction: remove action words
+                        # Improved extraction: chain prefix removal with whitespace normalization
                         item_text = t
-                        for prefix in ["запиши", "задача", "задачу", "задачи", "дело", "надо сделать", "надо делать", "нужно сделать", "нужно делать", "сделать", "выполнить", "построить", "приготовить", "помыть", "почистить", "убрать"]:
-                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
-                        if item_text.strip():
-                            result["item"] = item_text.strip()
+                        prefixes = [
+                            r"^план\s+на\s+день\s*[:\-]?\s*",
+                            r"^дела\s+на\s+день\s*[:\-]?\s*",
+                            r"^задачи\s+на\s+день\s*[:\-]?\s*",
+                            r"^напомни\s+сделать\s*",
+                            r"^запомни\s+сделать\s*",
+                            r"^не\s+забудь\s+сделать\s*",
+                            r"^надо\s+сделать\s*",
+                            r"^надо\s+делать\s*",
+                            r"^нужно\s+сделать\s*",
+                            r"^нужно\s+делать\s*",
+                            r"^выполнить\s*",
+                            r"^сделай\s*",
+                            r"^сделать\s*",
+                            r"^построить\s*",
+                            r"^приготовить\s*",
+                            r"^приготовь\s*",
+                            r"^помыть\s*",
+                            r"^помой\s*",
+                            r"^почистить\s*",
+                            r"^прочисти\s*",
+                            r"^убраться\s*",
+                            r"^прибраться\s*",
+                            r"^запиши\s*",
+                            r"^задача\s*",
+                            r"^задачу\s*",
+                            r"^задачи\s*",
+                            r"^дело\s*",
+                            r"^нужно\s*",
+                            r"^надо\s*",
+                        ]
+                        for prefix in prefixes:
+                            item_text = re.sub(prefix, "", item_text, flags=re.IGNORECASE)
+                        item_text = normalize_text(item_text)
+                        if item_text:
+                            result["item"] = item_text
 
                     elif intent_name == "todo_done":
                         # Extract index: "сделал дело 2" → index=2
@@ -1180,12 +1301,38 @@ def detect_local_intent(text: str) -> Optional[dict]:
                             result["index"] = int(m.group(1))
 
                     elif intent_name == "schedule_add":
-                        # Simplified extraction: remove action words
+                        # Improved extraction: chain prefix removal with whitespace normalization
                         item_text = t
-                        for prefix in ["урок", "занятие", "кружок", "секция", "запиши в расписание", "добавь в расписание", "пойду в", "иду в", "буду на", "иду на", "буду в", "пойду на"]:
-                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
-                        if item_text.strip():
-                            result["item"] = item_text.strip()
+                        prefixes = [
+                            r"^расписание\s+на\s+день\s*[:\-]?\s*",
+                            r"^план\s+на\s+день\s*[:\-]?\s*",
+                            r"^запиши\s+в\s+расписание\s*",
+                            r"^добавь\s+в\s+расписание\s*",
+                            r"^в\s+расписание\s*",
+                            r"^есть\s+урок\s*",
+                            r"^будет\s+урок\s*",
+                            r"^иду\s+на\s+урок\s*",
+                            r"^идём\s+на\s+урок\s*",
+                            r"^поедем\s+на\s+урок\s*",
+                            r"^иду\s+на\s+",
+                            r"^идём\s+на\s+",
+                            r"^поедем\s+на\s+",
+                            r"^пойду\s+на\s+",
+                            r"^иду\s+в\s+",
+                            r"^идём\s+в\s+",
+                            r"^поедем\s+в\s+",
+                            r"^пойду\s+в\s+",
+                            r"^буду\s+на\s+",
+                            r"^буду\s+в\s+",
+                            r"^пойду\s+",
+                            r"^иду\s+",
+                            r"^буду\s*",
+                        ]
+                        for prefix in prefixes:
+                            item_text = re.sub(prefix, "", item_text, flags=re.IGNORECASE)
+                        item_text = normalize_text(item_text)
+                        if item_text:
+                            result["item"] = item_text
 
                     elif intent_name == "reminder_add":
                         # Extract time and text: "напомни завтра в 15:00 позвонить маме"
@@ -1216,6 +1363,9 @@ def detect_local_intent(text: str) -> Optional[dict]:
                     return result
             except Exception:
                 continue
+
+    # Log unrecognized phrases (safely - only length + first word)
+    log_unrecognized_phrase(text)
 
     return None
 
@@ -1770,6 +1920,8 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
                 reply = intent_payload.get("reply")
                 if reply:
                     return with_menu(reply, profile)
+                # If no reply provided, generate a clarifying question
+                return with_menu(f"{generate_clarifying_question()}\nИли напиши «Меню».", profile)
 
             if intent == "menu":
                 return ("Вот меню:", main_menu_keyboard(profile))
@@ -2141,37 +2293,52 @@ def self_check_intent_parser() -> None:
         ("добавь хлеб", "list_add", {"item": "хлеб"}),
         ("купи молоко", "list_add", {"item": "молоко"}),
         ("добавь в список яблоки", "list_add", {"item": "яблоки"}),
+        ("запиши в список сыр", "list_add", {"item": "сыр"}),
+        ("надо в магазине колбаса", "list_add", {"item": "колбаса"}),
+        ("напомни купить сахар", "list_add", {"item": "сахар"}),
         ("сделал 2", "list_done", {"index": 2}),
         ("куплено 3", "list_done", {"index": 3}),
 
         # Todo operations
         ("запиши вынести мусор", "todo_add", {"item": "вынести мусор"}),
         ("убрать комнату", "todo_add", {"item": "убрать комнату"}),
+        ("убраться дома", "todo_add", {"item": "дома"}),
+        ("прибраться в комнате", "todo_add", {"item": "в комнате"}),
+        ("нужно сделать уроки", "todo_add", {"item": "уроки"}),
         ("сделал дело 1", "todo_done", {"index": 1}),
         ("мои дела", "todo_list", {}),
+        ("какие дела на сегодня", "todo_list", {}),
 
         # Schedule operations
         ("урок математики", "schedule_add", {"item": "урок математики"}),
         ("иду в кружок по рисованию", "schedule_add", {"item": "кружок по рисованию"}),
+        ("идём на кружок по музыке", "schedule_add", {"item": "кружок по музыке"}),
         ("расписание", "schedule_show", {}),
+        ("что у меня по расписанию", "schedule_show", {}),
+        ("уроки", "schedule_show", {}),
 
         # Reminders
         ("напомни завтра в 15:00 позвонить маме", "reminder_add", {"when": "15:00", "text": "позвонить маме"}),
         ("напомни в 18:00", "reminder_add", {"when": "18:00"}),
         ("мои напоминания", "reminder_list", {}),
+        ("какие есть напоминания", "reminder_list", {}),
 
         # Birthdays
         ("мой др 09.03", "birthday_set", {"date": "09.03"}),
         ("у кого дни рождения", "birthdays", {}),
+        ("кто родился", "birthdays", {}),
 
         # Menu and help
         ("меню", "menu", {}),
+        ("старт", "menu", {}),
         ("помощь", "menu", {}),
 
         # Facts and ideas
         ("интересный факт", "fact", {}),
+        ("расскажи что-нибудь", "fact", {}),
         ("идея на выходной", "idea", {}),
         ("чем заняться?", "idea", {}),
+        ("как провести время", "idea", {}),
     ]
 
     passed = 0
