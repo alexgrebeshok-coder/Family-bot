@@ -34,6 +34,7 @@ cd /Users/aleksandrgrebeshok/.openclaw/workspace && git reset --hard HEAD~1
 - Использует lockfile для предотвращения множественных запусков
 - Реализует backoff-ретраи: 5s → 15s → 30s → 60s → (повторение цикла)
 - Ограничивает количество попыток: максимум 10 попыток перед выходом с кодом 1
+- Поддерживает уведомления через переменную `WATCHDOG_NOTIFY_CMD`
 
 **Почему 10 попыток вместо бесконечных:**
 - Избегает бесконечных циклов в одном процессе (защита от зависаний)
@@ -153,7 +154,49 @@ rm /Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock
 
 1. **Оставьте LaunchAgent активным** - watchdog будет поддерживать gateway в живом состоянии
 2. **Периодически проверяйте логи** - особенно если gateway был неожиданно перезапущен
-3. **Мониторинг** - рассмотрите добавление уведомлений при множественных неудачах
+3. **Мониторинг** - включите уведомления через `WATCHDOG_NOTIFY_CMD` (см. ниже)
+
+### Уведомления
+
+Watchdog поддерживает уведомления через переменную `WATCHDOG_NOTIFY_CMD`. При включении вы будете получать уведомления о:
+- Успешном рестарте gateway
+- Исчерпании всех попыток восстановления
+
+**Включение уведомлений:**
+
+Редактируйте `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh`:
+
+```bash
+# Замените пустую строку на команду для уведомлений:
+WATCHDOG_NOTIFY_CMD="terminal-notifier -message"
+
+# Или используйте osascript для системных уведомлений:
+WATCHDOG_NOTIFY_CMD="osascript -e 'display notification \"$message\" with title \"OpenClaw Watchdog\"'"
+```
+
+**Примеры команд уведомлений:**
+
+```bash
+# macOS terminal-notifier (установка: brew install terminal-notifier)
+WATCHDOG_NOTIFY_CMD="terminal-notifier -message"
+
+# macOS встроенные уведомления (без установки)
+WATCHDOG_NOTIFY_CMD="osascript -e 'display notification \"$message\" with title \"OpenClaw Watchdog\"'"
+
+# Локальный webhook (для интеграции с другими системами)
+WATCHDOG_NOTIFY_CMD="curl -s -X POST -d 'message=$message' http://localhost:8080/webhook"
+
+# Пользовательский скрипт
+WATCHDOG_NOTIFY_CMD="/path/to/notify.sh"
+```
+
+**Перезапуск watchdog после изменений:**
+
+```bash
+# Перезагрузить LaunchAgent для применения изменений
+launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist
+launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist
+```
 
 ### Для разработки
 

@@ -10,6 +10,7 @@ WATCHDOG_LOG="/Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchd
 LOCKFILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock"
 MAX_ATTEMPTS=10
 BACKOFF_DELAYS=(5 15 30 60)  # backoff sequence in seconds
+WATCHDOG_NOTIFY_CMD=""  # Optional: command to run for notifications (e.g., "terminal-notifier -message")
 
 #############################################
 # Logging functions
@@ -37,6 +38,29 @@ log_error() {
 
 log_debug() {
     log "DEBUG" "$@"
+}
+
+#############################################
+# Notification function
+#############################################
+
+notify() {
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+    # Always log notification
+    log_info "NOTIFY: ${message}"
+
+    # Execute notification command if configured
+    if [ -n "${WATCHDOG_NOTIFY_CMD}" ]; then
+        # Execute with message as argument (quote-safe)
+        eval "${WATCHDOG_NOTIFY_CMD} \"${message}\"" > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            log_debug "Notification sent successfully"
+        else
+            log_warn "Notification command failed (exit code: $?)"
+        fi
+    fi
 }
 
 #############################################
@@ -140,6 +164,7 @@ main() {
             # Wait and recheck
             if wait_and_check "${delay}"; then
                 log_info "Gateway recovered successfully!"
+                notify "OpenClaw Gateway: restart successful"
                 success=true
             else
                 log_warn "Gateway still not running after restart"
@@ -167,6 +192,7 @@ main() {
         exit 0
     else
         log_error "Watchdog FAILED after ${MAX_ATTEMPTS} attempts - gateway not recovered"
+        notify "OpenClaw Gateway: FAILED after ${MAX_ATTEMPTS} attempts"
         log_info "=========================================="
         exit 1
     fi
