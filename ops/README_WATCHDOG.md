@@ -225,3 +225,123 @@ launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist
 
 ### Проблема: Множественные экземпляры watchdog
 **Решение:** Lockfile предотвращает множественные запуски; проверьте `ps aux | grep openclaw_watchdog`
+
+---
+
+## Прозрачность и Уведомления
+
+Watchdog обеспечивает максимальную прозрачность через систему уведомлений о всех ключевых событиях.
+
+### Уведомляемые события
+
+| Событие | Описание | Пример сообщения |
+|---------|----------|------------------|
+| **Старт watchdog** | Запуск watchdog (каждый раз при активации LaunchAgent) | `OpenClaw Watchdog: started (PID: 12345), monitoring gateway...` |
+| **Gateway down detected** | Обнаружен сбой gateway | `OpenClaw Watchdog: gateway DOWN detected, starting recovery...` |
+| **Попытка рестарта** | Каждая попытка перезапуска gateway | `OpenClaw Watchdog: restart attempt 1/10` |
+| **Рестарт успешен** | Gateway восстановлен после сбоя | `OpenClaw Watchdog: gateway recovered after 1 attempt(s)` |
+| **Фатал после N попыток** | Не удалось восстановить gateway за MAX_ATTEMPTS | `OpenClaw Watchdog: FATAL - failed to recover gateway after 10 attempts` |
+| **Heartbeat** | Периодическое подтверждение работы (раз в 6 часов) | `OpenClaw Watchdog heartbeat: gateway alive, monitoring active (last check: 2026-02-21 09:43:00)` |
+
+### Heartbeat (Периодические подтверждения)
+
+**Интервал:** Каждые 6 часов (настраивается через `HEARTBEAT_HOURS`)
+
+**Файл состояния:** `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_heartbeat.ts`
+
+Содержит epoch timestamp последнего отправленного heartbeat для предотвращения спама.
+
+**Логика:**
+- Watchdog проверяет timestamp при каждом запуске
+- Если прошло ≥ `HEARTBEAT_HOURS` часов → отправляет heartbeat
+- Обновляет timestamp после отправки (даже если подавлен quiet hours)
+
+### Тихие часы (Quiet Hours)
+
+**По умолчанию:** 19:00–07:00 (Asia/Yekaterinburg)
+
+**Правило:**
+- **Heartbeat подавляется** в тихие часы
+- **Критические события (старт, down, restart attempts, fatal) — всегда отправляются**
+
+**Переменные в `openclaw_watchdog.sh`:**
+```bash
+QUIET_HEARTBEAT_ONLY=true     # Подавлять только heartbeat (критические события всегда)
+QUIET_START=19                # Начало тихих часов (19:00)
+QUIET_END=7                   # Конец тихих часов (07:00)
+HEARTBEAT_HOURS=6             # Интервал heartbeat (часы)
+TIMEZONE="Asia/Yekaterinburg" # Часовой пояс для расчёта
+```
+
+### Настройка уровня тишины
+
+#### 1. Отключить heartbeat (только критические события)
+
+В `openclaw_watchdog.sh`:
+```bash
+# Увеличьте интервал heartbeat до экстремально большого значения
+HEARTBEAT_HOURS=99999
+```
+
+#### 2. Полная тишина (все уведомления отключены)
+
+В `openclaw_watchdog.sh`:
+```bash
+# Очистите переменную notification команды
+WATCHDOG_NOTIFY_CMD=""
+```
+
+ИЛИ создайте флаг `QUIET_ALL=true` в начале скрипта:
+```bash
+QUIET_ALL=true  # Полная тишина (все уведомления отключены)
+```
+
+И измените функцию `notify()`:
+```bash
+notify() {
+    local message="$*"
+    # Полная тишина
+    if [ "${QUIET_ALL}" = "true" ]; then
+        log_info "NOTIFY (SUPPRESSED): ${message}"
+        return 0
+    fi
+    # ... остальной код
+}
+```
+
+#### 3. Изменить тихие часы
+
+```bash
+# Пример: тихие часы с 22:00 до 06:00
+QUIET_START=22
+QUIET_END=6
+```
+
+```bash
+# Пример: отключить тихие часы (всегда отправлять heartbeat)
+QUIET_START=0
+QUIET_END=0  # Специальное значение: без тихих часов
+```
+
+#### 4. Изменить интервал heartbeat
+
+```bash
+# Каждые 12 часов вместо 6
+HEARTBEAT_HOURS=12
+
+# Каждый час (только для отладки!)
+HEARTBEAT_HOURS=1
+```
+
+### Перезапуск после изменений
+
+После любых изменений в `openclaw_watchdog.sh`:
+
+```bash
+# Перезагрузить LaunchAgent
+launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist
+launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist
+
+# Проверить статус
+launchctl list | grep openclaw
+```

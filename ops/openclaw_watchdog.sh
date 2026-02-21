@@ -8,9 +8,17 @@
 # Configuration
 WATCHDOG_LOG="/Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log"
 LOCKFILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock"
+HEARTBEAT_FILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_heartbeat.ts"
 MAX_ATTEMPTS=10
 BACKOFF_DELAYS=(5 15 30 60)  # backoff sequence in seconds
 WATCHDOG_NOTIFY_CMD="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_notify.sh"  # Optional: command to run for notifications
+
+# Transparency & Quiet Hours Configuration
+QUIET_HEARTBEAT_ONLY=true     # Only suppress heartbeat during quiet hours (critical events always sent)
+QUIET_START=19                # Quiet hours start (19:00)
+QUIET_END=7                   # Quiet hours end (07:00)
+HEARTBEAT_HOURS=6             # Send heartbeat every N hours
+TIMEZONE="Asia/Yekaterinburg" # Timezone for quiet hours calculation
 
 #############################################
 # Logging functions
@@ -41,12 +49,87 @@ log_debug() {
 }
 
 #############################################
+# Quiet Hours & Heartbeat Functions
+#############################################
+
+# Check if current time is within quiet hours
+is_quiet_hours() {
+    local current_hour=$(TZ="${TIMEZONE}" date +%H)
+    local hour_num=${current_hour#0}  # Remove leading zero for arithmetic
+
+    # Handle overnight quiet hours (19:00 - 07:00)
+    if [ "${QUIET_START}" -gt "${QUIET_END}" ]; then
+        # Quiet period spans midnight (e.g., 19-07)
+        if [ ${hour_num} -ge "${QUIET_START}" ] || [ ${hour_num} -lt "${QUIET_END}" ]; then
+            return 0  # Yes, in quiet hours
+        fi
+    else
+        # Normal period (e.g., 02-05)
+        if [ ${hour_num} -ge "${QUIET_START}" ] && [ ${hour_num} -lt "${QUIET_END}" ]; then
+            return 0  # Yes, in quiet hours
+        fi
+    fi
+
+    return 1  # Not in quiet hours
+}
+
+# Check if heartbeat should be sent (not suppressed)
+should_send_heartbeat() {
+    if [ "${QUIET_HEARTBEAT_ONLY}" = "true" ] && is_quiet_hours; then
+        log_debug "Heartbeat suppressed during quiet hours (${QUIET_START}:00-${QUIET_END}:00)"
+        return 1
+    fi
+    return 0
+}
+
+# Send heartbeat if needed (every HEARTBEAT_HOURS)
+send_heartbeat_if_needed() {
+    local now_epoch=$(date +%s)
+    local last_sent=0
+
+    # Read last heartbeat time from file if exists
+    if [ -f "${HEARTBEAT_FILE}" ]; then
+        last_sent=$(cat "${HEARTBEAT_FILE}")
+    fi
+
+    local hours_since_last=$(( (now_epoch - last_sent) / 3600 ))
+
+    # Check if it's time to send heartbeat
+    if [ ${hours_since_last} -ge "${HEARTBEAT_HOURS}" ]; then
+        if should_send_heartbeat; then
+            notify "OpenClaw Watchdog heartbeat: gateway alive, monitoring active (last check: $(date '+%Y-%m-%d %H:%M:%S'))"
+            # Update heartbeat timestamp
+            echo "${now_epoch}" > "${HEARTBEAT_FILE}"
+            log_info "Heartbeat sent and timestamp updated"
+        else
+            log_debug "Heartbeat skipped (quiet hours)"
+            # Still update timestamp to avoid piling up heartbeats
+            echo "${now_epoch}" > "${HEARTBEAT_FILE}"
+        fi
+    else
+        log_debug "Heartbeat not due (last sent ${hours_since_last}h ago, interval ${HEARTBEAT_HOURS}h)"
+    fi
+}
+
+#############################################
 # Notification function
 #############################################
 
 notify() {
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local is_heartbeat=false
+
+    # Check if this is a heartbeat message
+    if [[ "${message}" == *"heartbeat"* ]]; then
+        is_heartbeat=true
+    fi
+
+    # Check if this message should be suppressed
+    if [ "${is_heartbeat}" = true ] && ! should_send_heartbeat; then
+        log_info "NOTIFY (SUPPRESSED): ${message}"
+        return 0
+    fi
 
     # Always log notification
     log_info "NOTIFY: ${message}"
@@ -136,6 +219,9 @@ main() {
     log_info "Watchdog started (PID: $$)"
     log_info "=========================================="
 
+    # Notify: watchdog started
+    notify "OpenClaw Watchdog: started (PID: $$), monitoring gateway..."
+
     # Acquire lock to prevent multiple instances
     acquire_lock
 
@@ -143,10 +229,14 @@ main() {
     log_info "Checking gateway status..."
     if check_gateway_status; then
         log_info "Gateway is running - exiting cleanly"
+        # Send heartbeat if due
+        send_heartbeat_if_needed
         exit 0
     fi
 
+    # Notify: gateway down detected
     log_warn "Gateway is NOT running - starting recovery process"
+    notify "OpenClaw Watchdog: gateway DOWN detected, starting recovery..."
 
     # Recovery loop with backoff
     local attempt=0
@@ -159,12 +249,16 @@ main() {
 
         log_info "Recovery attempt ${attempt}/${MAX_ATTEMPTS} (backoff: ${delay}s)"
 
+        # Notify: restart attempt
+        notify "OpenClaw Watchdog: restart attempt ${attempt}/${MAX_ATTEMPTS}"
+
         # Try to restart gateway
         if restart_gateway; then
             # Wait and recheck
             if wait_and_check "${delay}"; then
+                # Notify: restart successful
                 log_info "Gateway recovered successfully!"
-                notify "OpenClaw Gateway: restart successful"
+                notify "OpenClaw Watchdog: gateway recovered after ${attempt} attempt(s)"
                 success=true
             else
                 log_warn "Gateway still not running after restart"
@@ -191,8 +285,9 @@ main() {
         log_info "=========================================="
         exit 0
     else
+        # Notify: fatal after N attempts
         log_error "Watchdog FAILED after ${MAX_ATTEMPTS} attempts - gateway not recovered"
-        notify "OpenClaw Gateway: FAILED after ${MAX_ATTEMPTS} attempts"
+        notify "OpenClaw Watchdog: FATAL - failed to recover gateway after ${MAX_ATTEMPTS} attempts"
         log_info "=========================================="
         exit 1
     fi
