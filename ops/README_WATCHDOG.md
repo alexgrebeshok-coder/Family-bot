@@ -258,7 +258,7 @@ Watchdog обеспечивает максимальную прозрачнос�
 
 ### Тихие часы (Quiet Hours)
 
-**По умолчанию:** 19:00–07:00 (Asia/Yekaterinburg)
+**По умолчанию:** 22:00–07:00 (Asia/Yekaterinburg)
 
 **Правило:**
 - **Heartbeat подавляется** в тихие часы
@@ -267,7 +267,7 @@ Watchdog обеспечивает максимальную прозрачнос�
 **Переменные в `openclaw_watchdog.sh`:**
 ```bash
 QUIET_HEARTBEAT_ONLY=true     # Подавлять только heartbeat (критические события всегда)
-QUIET_START=19                # Начало тихих часов (19:00)
+QUIET_START=22                # Начало тихих часов (22:00)
 QUIET_END=7                   # Конец тихих часов (07:00)
 HEARTBEAT_HOURS=6             # Интервал heartbeat (часы)
 TIMEZONE="Asia/Yekaterinburg" # Часовой пояс для расчёта

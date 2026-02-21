@@ -15,7 +15,7 @@ WATCHDOG_NOTIFY_CMD="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_
 
 # Transparency & Quiet Hours Configuration
 QUIET_HEARTBEAT_ONLY=true     # Only suppress heartbeat during quiet hours (critical events always sent)
-QUIET_START=19                # Quiet hours start (19:00)
+QUIET_START=22                # Quiet hours start (22:00)
 QUIET_END=7                   # Quiet hours end (07:00)
 HEARTBEAT_HOURS=6             # Send heartbeat every N hours
 TIMEZONE="Asia/Yekaterinburg" # Timezone for quiet hours calculation
