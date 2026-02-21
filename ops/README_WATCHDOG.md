@@ -158,42 +158,37 @@ rm /Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock
 
 ### Уведомления
 
-Watchdog поддерживает уведомления через переменную `WATCHDOG_NOTIFY_CMD`. При включении вы будете получать уведомления о:
-- Успешном рестарте gateway
-- Исчерпании всех попыток восстановления
+Watchdog поддерживает уведомления через переменную `WATCHDOG_NOTIFY_CMD` и скрипт `watchdog_notify.sh`.
 
-**Включение уведомлений:**
+**Текущая конфигурация (Telegram DM):**
 
-Редактируйте `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh`:
+- Уведомления включены по умолчанию
+- Сообщения отправляются в Telegram (target: 1258992460)
+- Скрипт: `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_notify.sh`
+
+**Изменение канала или получателя:**
+
+Редактируйте `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_notify.sh`:
 
 ```bash
-# Замените пустую строку на команду для уведомлений:
-WATCHDOG_NOTIFY_CMD="terminal-notifier -message"
-
-# Или используйте osascript для системных уведомлений:
-WATCHDOG_NOTIFY_CMD="osascript -e 'display notification \"$message\" with title \"OpenClaw Watchdog\"'"
+# Измените target на нужный Telegram ID
+openclaw message send --channel telegram --target 1258992460 --message "$MESSAGE"
+#                                                  ^^^^^^^^^^ Ваш Telegram ID
 ```
 
-**Примеры команд уведомлений:**
+**Отключение уведомлений:**
+
+В `/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.sh` очистите переменную:
 
 ```bash
-# macOS terminal-notifier (установка: brew install terminal-notifier)
-WATCHDOG_NOTIFY_CMD="terminal-notifier -message"
-
-# macOS встроенные уведомления (без установки)
-WATCHDOG_NOTIFY_CMD="osascript -e 'display notification \"$message\" with title \"OpenClaw Watchdog\"'"
-
-# Локальный webhook (для интеграции с другими системами)
-WATCHDOG_NOTIFY_CMD="curl -s -X POST -d 'message=$message' http://localhost:8080/webhook"
-
-# Пользовательский скрипт
-WATCHDOG_NOTIFY_CMD="/path/to/notify.sh"
+# Очистить для отключения:
+WATCHDOG_NOTIFY_CMD=""
 ```
 
 **Перезапуск watchdog после изменений:**
 
 ```bash
-# Перезагрузить LaunchAgent для применения изменений
+# Перезагрузить LaunchAgent
 launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist
 launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist
 ```

@@ -10,7 +10,7 @@ WATCHDOG_LOG="/Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchd
 LOCKFILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock"
 MAX_ATTEMPTS=10
 BACKOFF_DELAYS=(5 15 30 60)  # backoff sequence in seconds
-WATCHDOG_NOTIFY_CMD=""  # Optional: command to run for notifications (e.g., "terminal-notifier -message")
+WATCHDOG_NOTIFY_CMD="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_notify.sh"  # Optional: command to run for notifications
 
 #############################################
 # Logging functions
@@ -54,7 +54,7 @@ notify() {
     # Execute notification command if configured
     if [ -n "${WATCHDOG_NOTIFY_CMD}" ]; then
         # Execute with message as argument (quote-safe)
-        eval "${WATCHDOG_NOTIFY_CMD} \"${message}\"" > /dev/null 2>&1
+        "${WATCHDOG_NOTIFY_CMD}" "${message}" > /dev/null 2>&1
         if [ $? -eq 0 ]; then
             log_debug "Notification sent successfully"
         else
