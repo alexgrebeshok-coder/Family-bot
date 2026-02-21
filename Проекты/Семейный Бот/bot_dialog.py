@@ -44,17 +44,76 @@ TESTING:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
 import time
 from datetime import datetime, date, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 import requests
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
+
+# -----------------------------
+# Logging Setup
+# -----------------------------
+# Configure logging with rotation to prevent log files from growing too large
+def setup_logging() -> logging.Logger:
+    """Setup rotating file handler for bot dialog logs."""
+    logger = logging.getLogger("familybot_dialog")
+    logger.setLevel(logging.INFO)
+
+    # Prevent duplicate handlers
+    if logger.handlers:
+        return logger
+
+    # Main log file: ~/Library/Logs/familybot_dialog.log
+    log_dir = Path.home() / "Library" / "Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    main_log_path = log_dir / "familybot_dialog.log"
+
+    # Secondary log file: /tmp/family_bot.log (if writable)
+    tmp_log_path = Path("/tmp/family_bot.log")
+
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Main log handler with rotation (5MB max, keep 5 backups)
+    main_handler = RotatingFileHandler(
+        main_log_path,
+        maxBytes=5 * 1024 * 1024,  # 5MB
+        backupCount=5,
+        encoding="utf-8"
+    )
+    main_handler.setFormatter(formatter)
+    main_handler.setLevel(logging.INFO)
+    logger.addHandler(main_handler)
+
+    # Try to add secondary handler for /tmp (fail silently if not writable)
+    try:
+        tmp_handler = RotatingFileHandler(
+            tmp_log_path,
+            maxBytes=5 * 1024 * 1024,  # 5MB
+            backupCount=3,
+            encoding="utf-8"
+        )
+        tmp_handler.setFormatter(formatter)
+        tmp_handler.setLevel(logging.INFO)
+        logger.addHandler(tmp_handler)
+    except (PermissionError, OSError):
+        pass  # /tmp may not be writable, skip silently
+
+    return logger
+
+# Initialize logger
+bot_logger = setup_logging()
 
 # -----------------------------
 # Config
@@ -297,6 +356,10 @@ def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any], rep
             item["reply_markup"] = reply_markup
         state.setdefault("pending", []).append(item)
         save_state(state)
+
+        # Log message queued for morning (without sensitive content)
+        text_preview = text[:30] + "..." if len(text) > 30 else text
+        bot_logger.info(f"Message queued for morning (chat_id={chat_id}): {text_preview}")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -307,8 +370,16 @@ def send_message(token: str, chat_id: int, text: str, state: Dict[str, Any], rep
     }
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    r = requests.post(url, data=payload, timeout=20)
-    r.raise_for_status()
+
+    try:
+        r = requests.post(url, data=payload, timeout=20)
+        r.raise_for_status()
+
+        # Log successful message send (without sensitive content)
+        text_preview = text[:30] + "..." if len(text) > 30 else text
+        bot_logger.info(f"Message sent (chat_id={chat_id}): {text_preview}")
+    except Exception as e:
+        bot_logger.error(f"Failed to send message to chat_id={chat_id}: {e}")
 
 
 def process_pending(token: str, state: Dict[str, Any]) -> None:
@@ -1215,8 +1286,14 @@ def _fallback_reply() -> str:
 def generate_openrouter_reply(user_text: str, audience: str) -> Optional[str]:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
+        bot_logger.warning("OPENROUTER_API_KEY not set, OpenRouter reply unavailable")
         return None
     model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
+
+    # Log LLM call
+    text_preview = user_text[:30] + "..." if len(user_text) > 30 else user_text
+    bot_logger.info(f"LLM reply requested (OpenRouter): {text_preview}")
+
     system = (
         "Ты семейный помощник в личных сообщениях. "
         "Отвечай коротко, дружелюбно и безопасно. "
@@ -1250,16 +1327,28 @@ def generate_openrouter_reply(user_text: str, audience: str) -> Optional[str]:
         data = r.json()
         msg = data["choices"][0]["message"]["content"]
         msg = str(msg).strip() if msg is not None else ""
+
+        # Log LLM result
+        if msg:
+            msg_preview = msg[:50] + "..." if len(msg) > 50 else msg
+            bot_logger.info(f"LLM reply received (OpenRouter): {msg_preview}")
+
         return msg or None
-    except Exception:
+    except Exception as e:
+        bot_logger.error(f"OpenRouter API error in reply generation: {e}")
         return None
 
 
 def generate_openrouter_intent(user_text: str, audience: str) -> Optional[dict]:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
+        bot_logger.warning("OPENROUTER_API_KEY not set, LLM intent parsing unavailable")
         return None
     model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
+
+    # Log LLM call
+    text_preview = user_text[:30] + "..." if len(user_text) > 30 else user_text
+    bot_logger.info(f"LLM intent parsing requested (OpenRouter): {text_preview}")
 
     # Enhanced system prompt with better examples and constraints
     system = (
@@ -1327,18 +1416,33 @@ def generate_openrouter_intent(user_text: str, audience: str) -> Optional[dict]:
         data = r.json()
         msg = data["choices"][0]["message"]["content"]
         msg = str(msg).strip() if msg is not None else ""
-        return extract_json(msg)
-    except Exception:
+        result = extract_json(msg)
+
+        # Log LLM result
+        if result:
+            intent = result.get("intent", "unknown")
+            bot_logger.info(f"LLM intent parsed: {intent}")
+        else:
+            bot_logger.warning(f"LLM intent parsing failed to extract JSON from: {msg[:100]}")
+
+        return result
+    except Exception as e:
+        bot_logger.error(f"OpenRouter API error in intent parsing: {e}")
         return None
 
 
 def generate_zai_reply(user_text: str, audience: str) -> str:
     api_key = os.getenv("ZAI_API_KEY")
     if not api_key:
+        bot_logger.warning("ZAI_API_KEY not set, falling back to OpenRouter")
         reply = generate_openrouter_reply(user_text, audience)
         return reply or _fallback_reply()
     model = os.getenv("ZAI_MODEL", "glm-4.7")
     base_url = os.getenv("ZAI_API_BASE", ZAI_API_BASE_DEFAULT)
+
+    # Log LLM call
+    text_preview = user_text[:30] + "..." if len(user_text) > 30 else user_text
+    bot_logger.info(f"LLM reply requested (ZAI): {text_preview}")
 
     def alt_base(url: str) -> str:
         if "/coding/" in url:
@@ -1391,10 +1495,15 @@ def generate_zai_reply(user_text: str, audience: str) -> str:
                 msg = "".join([p.get("text", "") for p in msg if isinstance(p, dict)])
             msg = str(msg).strip() if msg is not None else ""
             if msg:
+                # Log successful ZAI response
+                msg_preview = msg[:50] + "..." if len(msg) > 50 else msg
+                bot_logger.info(f"LLM reply received (ZAI): {msg_preview}")
                 return msg
-        except Exception:
+        except Exception as e:
+            bot_logger.error(f"ZAI API error (base={base}): {e}")
             continue
 
+    bot_logger.warning("ZAI API failed, falling back to OpenRouter")
     reply = generate_openrouter_reply(user_text, audience)
     return reply or _fallback_reply()
 
@@ -1641,6 +1750,9 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
 
         # 1. Try local regex-based intent first (fast, no API calls)
         intent_payload = detect_local_intent(norm)
+        if intent_payload:
+            intent = intent_payload.get("intent", "")
+            bot_logger.info(f"Local intent detected: {intent}")
 
         # 2. Fall back to LLM if local didn't match
         if not intent_payload:
@@ -1972,20 +2084,26 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
     fs = ensure_family_settings(state)
     notify_hour = fs.get("notify_hour", PARENT_NOTIFY_HOUR)
 
+    # Log scheduler run
+    bot_logger.info(f"Scheduler running (time={ts.strftime('%H:%M')}, weekday={ts.weekday()})")
+
     for uid, profile in state.get("profiles", {}).items():
         if not is_child_profile(profile):
             continue
         chat_id = int(uid)
         responded_today = has_response_today(profile, ts)
+        user_name = profile_name(profile) or f"User {uid}"
 
         # morning
         if ts.hour == MORNING_HOUR and profile.get("last_morning_prompt") != today_str:
+            bot_logger.info(f"Morning check-in sent to {user_name} (id={uid})")
             msg = weekend_prompt(profile) if is_weekend else morning_prompt(profile)
             send_message(token, chat_id, msg, state)
             profile["last_morning_prompt"] = today_str
 
         # evening (re-ask if no response today)
         if ts.hour == EVENING_HOUR and profile.get("last_evening_prompt") != today_str:
+            bot_logger.info(f"Evening check-in sent to {user_name} (id={uid})")
             if is_weekend:
                 msg = weekend_prompt(profile)
             else:
@@ -1998,6 +2116,8 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
 
         # parent notify (once per day if no response)
         if ts.hour == notify_hour and not responded_today and profile.get("last_parent_notify") != today_str:
+            if fs.get("parent_ids"):
+                bot_logger.info(f"Parent notification sent for {user_name} (id={uid}): child didn't respond today")
             if fs.get("parent_ids"):
                 notify_parents(token, state, int(uid), profile, "не ответил сегодня на сообщения")
                 profile["last_parent_notify"] = today_str
@@ -2094,8 +2214,10 @@ def main() -> int:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         print("Missing TELEGRAM_BOT_TOKEN", flush=True)
+        bot_logger.error("Missing TELEGRAM_BOT_TOKEN - bot cannot start")
         return 1
 
+    bot_logger.info("Bot starting up...")
     state = load_state()
     offset = state.get("last_update_id", 0)
 
@@ -2127,6 +2249,12 @@ def main() -> int:
 
                 profile = profile_for(state, user_id)
                 update_profile_from_user(profile, user)
+
+                # Log incoming message (without sensitive data)
+                user_name = profile_name(profile) or f"User {user_id}"
+                text_preview = text[:50] + "..." if len(text) > 50 else text
+                bot_logger.info(f"Received message from {user_name} (id={user_id}): {text_preview}")
+                update_profile_from_user(profile, user)
                 response = handle_message(text, user_id, profile, state)
                 if response:
                     reply_markup = None
@@ -2137,7 +2265,8 @@ def main() -> int:
 
             state["last_update_id"] = offset
             save_state(state)
-        except Exception:
+        except Exception as e:
+            bot_logger.error(f"Error in main loop: {e}", exc_info=True)
             time.sleep(3)
 
     return 0
