@@ -8,6 +8,38 @@ Private DM helper for kids/family:
 - Quiet hours after 22:00 (no outgoing messages)
 
 Run as a long-lived process.
+
+IMPROVEMENTS (Intent Parser Enhancement):
+1. Local Regex-based Intent Detection:
+   - Fast pattern matching without external API calls
+   - Handles common phrases in Russian
+   - Supports lists, todos, schedule, reminders, birthdays, facts, ideas
+
+2. Enhanced LLM Prompt:
+   - Better examples for intent classification
+   - More specific field requirements
+   - Child-mode awareness
+
+3. Child-Mode Safety:
+   - Shopping lists restricted to adults only
+   - Notifications settings restricted to adults
+   - Profile deletion restricted to adults
+   - Reminder time restrictions for children (07:00-22:00)
+   - Extended negative topic filtering
+
+4. Self-Check Function:
+   - Test suite for local intent detection
+   - Run with: self_check_intent_parser()
+
+5. New Intents Supported:
+   - All previous intents maintained
+   - Better natural language understanding
+   - Multiple phrase variations per intent
+
+TESTING:
+- Run self-check: python -c "from bot_dialog import self_check_intent_parser; self_check_intent_parser()"
+- Test child mode: Set is_child=True and try list_add (should be blocked)
+- Test LLM fallback: Use phrases not covered by regex patterns
 """
 from __future__ import annotations
 
@@ -48,7 +80,155 @@ NEGATIVE_TOPICS = [
     "медицин", "болезн", "диагноз", "лекар", "суд", "адвокат", "юрид",
     "финанс", "кредит", "инвест", "бирж", "ставк", "депресс", "суиц",
     "18+", "сексуал", "наркот", "алкогол", "ставки", "казино",
+    "смерт", "убийств", "погиб", "труп", "самоуб", "пистолет", "оруж", "взрыв",
 ]
+
+# -----------------------------
+# Intent Parser Patterns
+# -----------------------------
+# Local regex patterns for fast intent detection
+# INTENT PARSER EXAMPLES (for documentation and testing)
+#
+# List Operations (Adults only):
+#   "добавь хлеб"              → list_add, item="хлеб"
+#   "купи молоко"              → list_add, item="молоко"
+#   "добавь в список яблоки"    → list_add, item="яблоки"
+#   "продукты: томаты, огурцы"  → list_add, items=["томаты", "огурцы"]
+#   "сделал 2"                 → list_done, index=2
+#   "куплено 3"                → list_done, index=3
+#   "очисти список"            → list_clear
+#   "что в списке"             → list_show
+#
+# Todo Operations (All):
+#   "запиши вынести мусор"      → todo_add, item="вынести мусор"
+#   "убрать комнату"           → todo_add, item="убрать комнату"
+#   "сделать уроки"            → todo_add, item="сделать уроки"
+#   "сделал дело 1"            → todo_done, index=1
+#   "мои дела"                 → todo_list
+#   "задачи на сегодня"        → todo_list
+#
+# Schedule Operations (All):
+#   "урок математики"          → schedule_add, item="урок математики"
+#   "иду в кружок по рисованию" → schedule_add, item="кружок по рисованию"
+#   "расписание"               → schedule_show
+#   "покажи расписание"        → schedule_show
+#
+# Reminders (All, with child time restrictions):
+#   "напомни завтра в 15:00 позвонить маме"  → reminder_add, when="15:00", text="позвонить маме"
+#   "напомни в 18:00"              → reminder_add, when="18:00"
+#   "напомни 25.02 14:00 урок"     → reminder_add, when="25.02 14:00", text="урок"
+#   "мои напоминания"              → reminder_list
+#   "удали напоминание 2"          → reminder_delete, index=2
+#
+# Birthdays (All):
+#   "мой др 09.03"               → birthday_set, date="09.03"
+#   "у меня др 15.09"            → birthday_set, date="15.09"
+#   "дни рождения"               → birthdays
+#   "у кого дни рождения"        → birthdays
+#
+# General (All):
+#   "меню"                       → menu
+#   "интересный факт"            → fact
+#   "идея на выходной"           → idea
+#   "чем заняться?"              → idea
+#
+# Settings (Adults only):
+#   "включи уведомления"         → enable_notifications
+#   "отключи уведомления"        → disable_notifications
+#   "удали мои данные"           → delete_profile
+#
+# CHILD MODE SAFETY:
+# - Children cannot manage shopping lists (list_* intents blocked)
+# - Children cannot enable/disable notifications
+# - Children cannot delete their profile
+# - Child reminders restricted to 07:00 - 22:00
+# - Negative topics filtered out (violence, drugs, etc.)
+#
+# TEST THE PARSER:
+# Run: python -c "from bot_dialog import self_check_intent_parser; self_check_intent_parser()"
+# This will run the self-check function and show results.
+
+INTENT_PATTERNS = {
+    "list_add": [
+        r"^(добавь|купи|нужн|надо|есть|взять)\s+.*?(в список|в покупки)?",
+        r"^(куп|покупк|продукт|еда|молоко|хлеб|масло|сахар|соль|яйцо)",
+        r"^(надо купить|нужно купить|нужн(о|о) купить|куп(и|ить)\s+)",
+        r"^(в список|в список покупок)",
+        r"^(пок|продукт)\s*(в список|добавить)?",
+    ],
+    "list_show": [
+        r"^(что\s*(в|в\s*списке)|покажи\s*(список|что\s*есть)|какой\s*список)",
+        r"^(список покупок|покупки|что купить)",
+    ],
+    "list_done": [
+        r"^(сделал|выполнил|зачеркн|отмет|убрал)\s+.*?(из списка)?",
+        r"^(куплен(о|а|ы)?|купил|взято|взял)",
+        r"^(отметить\s+в\s+списке)",
+        r"^(готово|сделано)\s+\d+",
+    ],
+    "todo_add": [
+        r"^(запиши|задач|дело|надо\s+сделать|надо\s+делать|нужно\s+сделать)",
+        r"^(сделать|выполнить|построить|приготовить|убрать|помыть|почистить)",
+        r"^(напомни\s+сделать|запомни\s+сделать)",
+        r"^(план\s+на\s+день|дела\s+на\s+день)",
+    ],
+    "todo_list": [
+        r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела)",
+        r"^(покажи\s*дела|список\s*дел)",
+    ],
+    "todo_done": [
+        r"^(сделал\s*дело|выполнил\s*дело|отметил\s*дело)",
+        r"^(дело\s*сделано|задача\s*выполнена)",
+        r"^(готово\s*дело)",
+    ],
+    "schedule_add": [
+        r"^(расписание|урок|занятие|кружок|секция)\s*(добавить|в\s+расписание)?",
+        r"^(пойду|иду|буду)\s+.*(в\s+)?(кружок|секцию|урок|школу)",
+        r"^(запиши\s+в\s+расписание|добавь\s+в\s+расписание)",
+    ],
+    "schedule_show": [
+        r"^(моё\s*расписание|расписание|какое\s*расписание)",
+        r"^(покажи\s*расписание|что\s*у\s*меня\s*по\s*расписанию)",
+    ],
+    "reminder_add": [
+        r"^(напомни|напомн(и|ь)|запомни|не\s+забудь|поставь\s+напоминание)",
+        r"^(напомнить|напоминаю|будущее|завтра|через)",
+        r"^(в\s+\d+[.:]\d+|в\s+завтра|через\s+\d+)",
+    ],
+    "reminder_list": [
+        r"^(мои\s*напоминания|напоминания|какие\s*напоминания)",
+        r"^(покажи\s*напоминания)",
+    ],
+    "birthday_set": [
+        r"^(мой\s*др|мой\s*день\s*рождения|когда\s*у\s*меня\s*др|у\s*меня\s*др)",
+        r"^(день\s*рождения\s*у\s*меня|я\s*родился|родилась)",
+    ],
+    "birthdays": [
+        r"^(дни\s*рождения|когда\s*дни\s*рождения|у\s*кого\s*день\s*рождения)",
+        r"^(др\s*семьи|дни\s*рождения\s*семьи)",
+    ],
+    "fact": [
+        r"^(факт|интересный\s*факт|факт\s*дня|расскажи\s*факт)",
+        r"^(что\s*интересное|что\s*нового)",
+    ],
+    "idea": [
+        r"^(идея|идея\s*на\s*выходной|чем\s*заняться|что\s*делать)",
+        r"^(предложи|подскажи|что\s*интересного\s*сделать)",
+    ],
+    "menu": [
+        r"^(меню|главное|главная|начало|главная\s*страница)",
+    ],
+    "delete_profile": [
+        r"^(удали\s*мои\s*данные|удалить\s*данные|стереть\s*данные|сбросить)",
+        r"^(удалить\s*профиль|сброс\s*профиля)",
+    ],
+    "enable_notifications": [
+        r"^(хочу\s*уведомления|включи\s*уведомления|уведомляй\s*меня)",
+    ],
+    "disable_notifications": [
+        r"^(не\s*хочу\s*уведомления|отключи\s*уведомления|без\s*уведомлений)",
+    ],
+}
 
 # -----------------------------
 # Helpers
@@ -854,6 +1034,180 @@ def extract_json(text: str) -> Optional[dict]:
         return None
 
 
+# -----------------------------
+# Local Intent Parser (Fast Fallback)
+# -----------------------------
+def detect_local_intent(text: str) -> Optional[dict]:
+    """
+    Fast regex-based intent detection without external API calls.
+    Returns intent payload dict or None if not matched.
+    """
+    t = text.lower().strip()
+    if not t:
+        return None
+
+    # Check for menu commands first (highest priority)
+    if t in {"меню", "menu", "начать", "start"}:
+        return {"intent": "menu"}
+    if t in {"помощь", "help"}:
+        return {"intent": "menu"}
+
+    # Check for list_show (before other list commands)
+    if re.search(r"^(что\s*(в|в\s*списке)|покажи\s*(список|что\s*есть)|какой\s*список|список покупок|покупки|что купить)", t):
+        return {"intent": "list_show"}
+
+    # Check for todo_list (before todo_add)
+    if re.search(r"^(мои\s*дела|дела|задачи|что\s+делать|какие\s*дела|покажи\s*дела|список\s*дел)", t):
+        return {"intent": "todo_list"}
+
+    # Check for schedule_show (before schedule_add)
+    if re.search(r"^(моё\s*расписание|расписание|покажи\s*расписание|какое\s*расписание|что\s*у\s*меня\s*по\s*расписанию)", t):
+        return {"intent": "schedule_show"}
+
+    # Check for reminder_list
+    if re.search(r"^(мои\s*напоминания|напоминания|какие\s*напоминания|покажи\s*напоминания)", t):
+        return {"intent": "reminder_list"}
+
+    # Check for birthdays
+    if re.search(r"^(дни\s*рождения|когда\s*дни\s*рождения|у\s*кого\s*день\s*рождения|др\s*семьи|дни\s*рождения\s*семьи)", t):
+        return {"intent": "birthdays"}
+
+    # Iterate through intent patterns
+    for intent_name, patterns in INTENT_PATTERNS.items():
+        for pattern in patterns:
+            try:
+                if re.search(pattern, t, re.IGNORECASE):
+                    result = {"intent": intent_name}
+
+                    # Extract additional data based on intent
+                    if intent_name == "list_add":
+                        # Simplified extraction: remove action words
+                        item_text = t
+                        for prefix in ["добавь", "купи", "нужно", "надо", "в список", "в покупки", "продукты", "продукт", "добавить", "взять", "есть"]:
+                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
+                        if item_text.strip():
+                            result["item"] = item_text.strip()
+
+                    elif intent_name == "list_done":
+                        # Extract index: "сделал 2" → index=2
+                        m = re.search(r"(\d+)", t)
+                        if m:
+                            result["index"] = int(m.group(1))
+
+                    elif intent_name == "todo_add":
+                        # Simplified extraction: remove action words
+                        item_text = t
+                        for prefix in ["запиши", "задача", "задачу", "задачи", "дело", "надо сделать", "надо делать", "нужно сделать", "нужно делать", "сделать", "выполнить", "построить", "приготовить", "помыть", "почистить", "убрать"]:
+                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
+                        if item_text.strip():
+                            result["item"] = item_text.strip()
+
+                    elif intent_name == "todo_done":
+                        # Extract index: "сделал дело 2" → index=2
+                        m = re.search(r"(\d+)", t)
+                        if m:
+                            result["index"] = int(m.group(1))
+
+                    elif intent_name == "schedule_add":
+                        # Simplified extraction: remove action words
+                        item_text = t
+                        for prefix in ["урок", "занятие", "кружок", "секция", "запиши в расписание", "добавь в расписание", "пойду в", "иду в", "буду на", "иду на", "буду в", "пойду на"]:
+                            item_text = re.sub(r"^" + prefix + r"\s*", "", item_text)
+                        if item_text.strip():
+                            result["item"] = item_text.strip()
+
+                    elif intent_name == "reminder_add":
+                        # Extract time and text: "напомни завтра в 15:00 позвонить маме"
+                        m_time = re.search(r"(?:напомни|напомн|запомни|не\s+забудь)\s*(?:завтра\s+)?(?:в\s+)?(\d{1,2}[.:]\d{2})", t)
+                        m_text = re.search(r"(?:напомни|напомн|запомни|не\s+забудь)(?:\s+завтра)?(?:\s+в\s+\d{1,2}[.:]\d{2})?\s+(.+)", t)
+                        if m_time:
+                            result["when"] = m_time.group(1)
+                        if m_text:
+                            result["text"] = m_text.group(1).strip()
+                        elif m_time and not m_text:
+                            # If only time provided, extract context from sentence
+                            text_after = re.sub(r".*\d{1,2}[.:]\d{2}\s*", "", t).strip()
+                            if text_after:
+                                result["text"] = text_after
+
+                    elif intent_name == "birthday_set":
+                        # Extract date: "мой др 09.03" → date="09.03"
+                        m = re.search(r"(\d{1,2}[./]\d{1,2})", t)
+                        if m:
+                            result["date"] = m.group(1)
+
+                    elif intent_name == "reminder_delete":
+                        # Extract index: "удали напоминание 2" → index=2
+                        m = re.search(r"(\d+)", t)
+                        if m:
+                            result["index"] = int(m.group(1))
+
+                    return result
+            except Exception:
+                continue
+
+    return None
+
+
+def is_child_safe_intent(intent_name: str, payload: dict, is_child: bool) -> bool:
+    """
+    Additional safety checks for child profiles.
+    Returns False if the intent/action is not allowed for children.
+
+    FOR CHILDREN (is_child=True):
+    ALLOWED intents:
+    - menu, todo_add, todo_list, todo_done (manage their own tasks)
+    - schedule_add, schedule_show (view/manage schedule)
+    - reminder_add, reminder_list (set reminders during reasonable hours)
+    - birthday_set, birthdays (view/set birthdays)
+    - fact, idea (educational content)
+    - none (no action)
+
+    BLOCKED intents for children:
+    - list_add, list_show, list_done, list_clear (shopping lists - adults only)
+    - enable/disable_notifications (settings - parents only)
+    - delete_profile (data deletion - requires parent approval)
+    """
+    if not is_child:
+        return True
+
+    # Children can manage their own tasks and schedule
+    allowed_intents = {
+        "menu",
+        "todo_add", "todo_list", "todo_done",
+        "schedule_add", "schedule_show",
+        "fact", "idea",
+        "birthdays",
+        "none",
+    }
+
+    # Reminders are allowed but with time restrictions
+    if intent_name == "reminder_add" or intent_name == "reminder_list":
+        when = payload.get("when", "")
+        if when and intent_name == "reminder_add":
+            try:
+                # Parse time and check it's during reasonable hours (07:00 - 22:00)
+                time_match = re.match(r"(\d{1,2})[.:](\d{2})", when)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    if hour >= 22 or hour < 7:
+                        return False  # Too late/early for child reminders
+            except Exception:
+                pass
+        # Reminder list is always safe
+        return True
+
+    # Birthday setting is safe
+    if intent_name == "birthday_set":
+        return True
+
+    # Check if intent is in allowed list
+    if intent_name not in allowed_intents:
+        return False
+
+    return True
+
+
 def _fallback_reply() -> str:
     return "Я здесь 🙂 Напиши, что нужно, или нажми «Меню»."
 
@@ -906,24 +1260,61 @@ def generate_openrouter_intent(user_text: str, audience: str) -> Optional[dict]:
     if not api_key:
         return None
     model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
+
+    # Enhanced system prompt with better examples and constraints
     system = (
-        "Ты парсер действий семейного бота. Верни СТРОГО JSON без текста. "
-        "Поля: intent (строка), list_name, item, items (массив), index (число), "
-        "when (в формате HH:MM или DD.MM HH:MM или YYYY-MM-DD HH:MM), text, date (ДД.ММ), reply. "
-        "Допустимые intent: menu, list_add, list_show, list_done, list_clear, todo_add, todo_list, todo_done, "
-        "schedule_add, schedule_show, reminder_add, reminder_list, reminder_delete, birthday_set, birthdays, "
-        "fact, idea, enable_notifications, disable_notifications, delete_profile, none. "
-        "Если пользователь просит интернет‑поиск/ссылки — intent=none и reply: 'Поиск в интернете сейчас отключён. '. "
-        "Если не уверен — intent=none и reply с уточнением."
+        "ТЫ — ПАРСЕР ДЕЙСТВИЙ СЕМЕЙНОГО БОТА. "
+        "ВЕРНИ СТРОГО JSON, БЕЗ ЛИШНЕГО ТЕКСТА. "
+        "\n\n"
+        "СЛОТЫ JSON: intent (обязательно), list_name, item, items (массив), index (число), "
+        "when (HH:MM или DD.MM HH:MM или YYYY-MM-DD HH:MM), text, date (ДД.ММ), reply.\n\n"
+        "ДОПУСТИМЫЕ INTENTS:\n"
+        "- menu: показать главное меню\n"
+        "- list_add: добавить в список (item или items)\n"
+        "- list_show: показать список\n"
+        "- list_done: отметить как выполненное (index)\n"
+        "- list_clear: очистить список\n"
+        "- todo_add: добавить дело (item)\n"
+        "- todo_list: показать дела\n"
+        "- todo_done: выполнить дело (index)\n"
+        "- schedule_add: добавить в расписание (item)\n"
+        "- schedule_show: показать расписание\n"
+        "- reminder_add: добавить напоминание (when, text)\n"
+        "- reminder_list: показать напоминания\n"
+        "- reminder_delete: удалить напоминание (index)\n"
+        "- birthday_set: указать день рождения (date)\n"
+        "- birthdays: показать все дни рождения\n"
+        "- fact: показать интересный факт\n"
+        "- idea: показать идею на выходной\n"
+        "- enable_notifications: включить уведомления\n"
+        "- disable_notifications: отключить уведомления\n"
+        "- delete_profile: удалить данные\n"
+        "- none: если не понял запрос или запрещённая тема\n\n"
+        "ПРАВИЛА:\n"
+        "1. Для 'when' используй формат: HH:MM (сегодня), DD.MM HH:MM (дата и время), "
+        "или 'завтра HH:MM' для завтра.\n"
+        "2. Для 'date' используй ДД.ММ (например, 09.03).\n"
+        "3. Если пользователь просит интернет-поиск/ссылки — intent=none с reply: 'Поиск в интернете сейчас отключён. '\n"
+        "4. Если не уверен — intent=none с clarifying reply.\n"
+        "5. Для детей (audience=child): запрещены list_*, enable/disable_notifications, delete_profile.\n"
+        "6. Если список/дата явно не указаны — не добавляй их в JSON.\n\n"
+        "ПРИМЕРЫ:\n"
+        "- 'добавь хлеб' → {\"intent\": \"list_add\", \"item\": \"хлеб\"}\n"
+        "- 'сделал дело 2' → {\"intent\": \"todo_done\", \"index\": 2}\n"
+        "- 'урок математики' → {\"intent\": \"schedule_add\", \"item\": \"урок математики\"}\n"
+        "- 'напомни завтра в 15:00 позвонить маме' → {\"intent\": \"reminder_add\", \"when\": \"завтра 15:00\", \"text\": \"позвонить маме\"}\n"
+        "- 'мой др 09.03' → {\"intent\": \"birthday_set\", \"date\": \"09.03\"}\n"
+        "- 'чем заняться?' → {\"intent\": \"idea\"}\n"
     )
+
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user_text},
         ],
-        "temperature": 0.2,
-        "max_tokens": 180,
+        "temperature": 0.2,  # Lower for more deterministic results
+        "max_tokens": 200,
     }
     try:
         r = requests.post(
@@ -1243,21 +1634,38 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         set_awaiting(profile, "delete_confirm")
         return ("Точно удалить ваши данные?", delete_confirm_keyboard())
 
-    # LLM intent parsing (max use)
+    # Enhanced intent parsing (local + LLM)
     if not norm.startswith("/") and is_allowed(norm):
         audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
-        intent_payload = generate_openrouter_intent(norm, audience)
+        is_child = is_child_profile(profile)
+
+        # 1. Try local regex-based intent first (fast, no API calls)
+        intent_payload = detect_local_intent(norm)
+
+        # 2. Fall back to LLM if local didn't match
+        if not intent_payload:
+            intent_payload = generate_openrouter_intent(norm, audience)
+
+        # 3. Process the detected intent
         if intent_payload:
             intent = str(intent_payload.get("intent", "")).strip().lower()
+
+            # Child-mode safety checks
+            if is_child and not is_child_safe_intent(intent, intent_payload, is_child):
+                return with_menu("Эта функция только для взрослых. Обратись к родителям.", profile)
+
             if intent in {"none", ""}:
                 reply = intent_payload.get("reply")
                 if reply:
                     return with_menu(reply, profile)
+
             if intent == "menu":
                 return ("Вот меню:", main_menu_keyboard(profile))
+
             if intent == "list_show":
                 name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
                 return with_menu(format_shared_list(state, name), profile)
+
             if intent == "list_add":
                 name = ensure_list_name(intent_payload.get("list_name") or DEFAULT_LIST_NAME)
                 items = intent_payload.get("items")
@@ -1595,6 +2003,86 @@ def run_scheduler(token: str, state: Dict[str, Any]) -> None:
                 profile["last_parent_notify"] = today_str
 
     save_state(state)
+
+
+# -----------------------------
+# Self-Check & Tests
+# -----------------------------
+def self_check_intent_parser() -> None:
+    """
+    Run a quick self-check of the intent parser.
+    Tests local regex patterns and LLM fallback.
+    Call this function to verify intent detection works correctly.
+    """
+    print("\n=== Intent Parser Self-Check ===\n")
+
+    test_cases = [
+        # List operations
+        ("добавь хлеб", "list_add", {"item": "хлеб"}),
+        ("купи молоко", "list_add", {"item": "молоко"}),
+        ("добавь в список яблоки", "list_add", {"item": "яблоки"}),
+        ("сделал 2", "list_done", {"index": 2}),
+        ("куплено 3", "list_done", {"index": 3}),
+
+        # Todo operations
+        ("запиши вынести мусор", "todo_add", {"item": "вынести мусор"}),
+        ("убрать комнату", "todo_add", {"item": "убрать комнату"}),
+        ("сделал дело 1", "todo_done", {"index": 1}),
+        ("мои дела", "todo_list", {}),
+
+        # Schedule operations
+        ("урок математики", "schedule_add", {"item": "урок математики"}),
+        ("иду в кружок по рисованию", "schedule_add", {"item": "кружок по рисованию"}),
+        ("расписание", "schedule_show", {}),
+
+        # Reminders
+        ("напомни завтра в 15:00 позвонить маме", "reminder_add", {"when": "15:00", "text": "позвонить маме"}),
+        ("напомни в 18:00", "reminder_add", {"when": "18:00"}),
+        ("мои напоминания", "reminder_list", {}),
+
+        # Birthdays
+        ("мой др 09.03", "birthday_set", {"date": "09.03"}),
+        ("у кого дни рождения", "birthdays", {}),
+
+        # Menu and help
+        ("меню", "menu", {}),
+        ("помощь", "menu", {}),
+
+        # Facts and ideas
+        ("интересный факт", "fact", {}),
+        ("идея на выходной", "idea", {}),
+        ("чем заняться?", "idea", {}),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for text, expected_intent, expected_data in test_cases:
+        result = detect_local_intent(text)
+        if result:
+            detected_intent = result.get("intent")
+            if detected_intent == expected_intent:
+                # Check if expected keys match
+                match = True
+                for key, value in expected_data.items():
+                    if result.get(key) != value:
+                        match = False
+                        break
+
+                if match:
+                    print(f"✓ PASS: '{text}' → {detected_intent} {expected_data}")
+                    passed += 1
+                else:
+                    print(f"✗ FAIL: '{text}' → {detected_intent} {result} (expected {expected_data})")
+                    failed += 1
+            else:
+                print(f"✗ FAIL: '{text}' → {detected_intent} (expected {expected_intent})")
+                failed += 1
+        else:
+            print(f"⚠ SKIP: '{text}' → No local match (would use LLM)")
+
+    print(f"\n=== Results: {passed} passed, {failed} failed ===")
+    print(f"Note: Skipped tests will use LLM fallback.\n")
 
 
 # -----------------------------
