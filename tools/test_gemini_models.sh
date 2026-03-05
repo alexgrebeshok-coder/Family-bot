@@ -16,8 +16,8 @@
 # Настройки
 API_URL="https://openrouter.ai/api/v1/chat/completions"
 TIMEOUT=30  # секунд на запрос
-MODEL_1="openrouter/google/gemini-2.5-flash-lite"
-MODEL_2="openrouter/google/gemini-3.1-flash-lite-preview"
+MODEL_1="google/gemini-2.5-flash-lite"
+MODEL_2="google/gemini-3.1-flash-lite-preview"
 
 # Проверка API ключа
 if [ -z "$OPENROUTER_API_KEY" ]; then
@@ -69,7 +69,7 @@ test_model() {
         # Проверяем результат
         if [ $exit_code -eq 0 ]; then
             local http_code=$(echo "$response" | tail -n1)
-            local body=$(echo "$response" | head -n -1)
+            local body=$(echo "$response" | sed '$d')
             
             # Проверяем на ошибки в ответе
             if [ "$http_code" = "200" ] && ! echo "$body" | grep -q "error"; then
