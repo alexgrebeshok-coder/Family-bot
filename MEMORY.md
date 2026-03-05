@@ -1,20 +1,12 @@
 # MEMORY.md
 
 ## Ключевое (кратко)
-- Проект: семейный Telegram‑бот (Python) в /Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/.
-- LLM: OpenRouter (z-ai/glm-4.5-air:free). Погода: Open‑Meteo (Сургут/Тюмень/Москва). Новости: RSS (siapress.ru, interfax.ru). Постинг в Telegram.
-- Расписание: ежедневный автозапуск в 07:30 Asia/Yekaterinburg через local cron + run_daily.sh (ретраи, лог /tmp/family_bot.log, wake при сбое).
-- Чат для постинга: супергруппа «Семья», chat_id = -1003880864767.
-- Правило: входящие аудио/voice по умолчанию расшифровывать через whisper‑cpp (whisper‑cli).
-
-# MEMORY.md
-
-## Ключевое (кратко)
-- Проект: семейный Telegram‑бот (Python) в /Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/.
-- LLM: OpenRouter (z-ai/glm-4.5-air:free). Погода: Open‑Meteo (Сургут/Тюмень/Москва). Новости: RSS (siapress.ru, interfax.ru). Постинг в Telegram.
-- Расписание: ежедневный автозапуск в 07:30 Asia/Yekaterinburg через local cron + run_daily.sh (ретраи, лог /tmp/family_bot.log, wake при сбое).
-- Чат для постинга: супергруппа «Семья», chat_id = -1003880864767.
-- Правило: входящие аудио/voice по умолчанию расшифровывать через whisper‑cpp (whisper‑cli).
+- Проект: семейный Telegram‑бот (Python) в /Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/
+- LLM: OpenRouter (z-ai/glm-4.5-air:free). Погода: Open‑Meteo (Сургут/Тюмень/Москва). Новости: RSS (siapress.ru, interfax.ru)
+- Расписание: ежедневный автозапуск в 07:30 Asia/Yekaterinberg через local cron + run_daily.sh
+- Чат для постинга: супергруппа «Семья», chat_id = -1003880864767
+- Правило: входящие аудио/voice по умолчанию расшифровывать через whisper‑cpp (whisper‑cli)
+- **OpenClaw: 2026.3.2** (обновлено 05.03.2026)
 
 ## Архитектура агентов (обновлено 24.02.2026)
 
@@ -24,19 +16,28 @@
 |-------|--------|-----------|------|
 | **main** | glm-5 | ZAI Pro ($15) | Оркестратор, общение с пользователем |
 | **main-worker** | glm-4.7 | ZAI | Исполнитель (exec, write, edit) |
-| **quick-research** | gemini-2.5-flash-lite | OpenRouter ($0) | Research, web поиск |
-| **quick-coder** | gemini-2.5-flash-lite | OpenRouter ($0) | Генерация кода |
-| **quick-writer** | gemini-2.5-flash-lite | OpenRouter ($0) | Тексты, документация |
-| **planner** | gemini-2.5-flash-lite | OpenRouter ($0) | Планирование задач |
+| **quick-research** | gemini-3.1-flash-lite-preview | OpenRouter ($0) | Research, web поиск |
+| **quick-coder** | gemini-3.1-flash-lite-preview | OpenRouter ($0) | Генерация кода |
+| **quick-writer** | gemini-3.1-flash-lite-preview | OpenRouter ($0) | Тексты, документация |
+| **planner** | gemini-3.1-flash-lite-preview | OpenRouter ($0) | Планирование задач |
 | **main-reviewer** | glm-4.7-flash | ZAI | Критика, проверка качества |
 
-### Результаты тестов параллельных агентов (24.02.2026):
+### Результаты тестов параллельных агентов:
 
+**Тест 24.02.2026:**
 | Провайдер | Модель | 1 агент | 2 параллельно | Скорость |
 |-----------|--------|---------|---------------|----------|
 | **ZAI Pro** | glm-4.7-flash | ✅ | ✅ 1/2 | 42с |
-| **OpenRouter** | gemini-2.5-flash-lite | ✅ | ✅ 2/2 | 21с (в 2x быстрее) |
+| **OpenRouter** | gemini-2.5-flash-lite | ✅ | ✅ 2/2 | 21с |
 | **OpenRouter free** | qwen3, deepseek | ❌ timeout | ❌ | — |
+
+**Тест 05.03.2026 (Gemini 3.1 vs 2.5):**
+| Model | Avg Time | Errors | Вывод |
+|-------|----------|--------|-------|
+| gemini-2.5-flash-lite | 5.02s | 0 | Baseline |
+| gemini-3.1-flash-lite-preview | **1.43s** | 0 | **в 3.5x быстрее** ✅ |
+
+→ Мигрировали на Gemini 3.1 Lite для всех subagents
 
 ### Pipeline архитектура (3-stage):
 
@@ -72,36 +73,37 @@ Stage 3: Review (2 параллельно, Gemini, ~15с)
 ### 2026-02-28 18:49
 Тестовая запись — Этап 2 начат
 
-### 2026-03-04 10:53
-**Добавлено правило Proof of Work для всех агентов**
+### 2026-03-05 10:15
+**Обновление OpenClaw 2026.3.2 + тест Gemini 3.1**
+
+**OpenClaw обновлён:** 2026.3.1 → 2026.3.2
+- Новые фичи: sessions_spawn attachments, PDF tool, security hardening
+- Config valid, Gateway running ✅
+
+**Тест Gemini 3.1 vs 2.5:**
+- Скрипт: `~/.openclaw/workspace/tools/test_gemini_models.sh`
+- Результат: Gemini 3.1 в 3.5x быстрее (1.43s vs 5.02s avg)
+- Решение: оставить Gemini 3.1 Lite для всех subagents
+
+**Security improvements:**
+- `chmod 600 ~/.openclaw/openclaw.json` ✅
+- Git backup: 53 файла, готово к push
 
 ### 2026-03-04 16:47
 **Миграция на Gemini 3.1 Flash Lite Preview**
 
-Новая модель на OpenRouter: `google/gemini-3.1-flash-lite-preview`
+Новая модель: `google/gemini-3.1-flash-lite-preview`
 - Pricing: $0.25/M input, $1.50/M output (дешевле в 2x!)
 - Context: 66K
 
-Обновлены агенты:
-- quick-research: gemini-2.5-flash-lite → gemini-3.1-flash-lite-preview
-- quick-coder: gemini-2.5-flash-lite → gemini-3.1-flash-lite-preview
-- planner: gemini-2.5-flash-lite → gemini-3.1-flash-lite-preview
-
 Алиас: Gemini-3.1-Lite
+Источник: канал "Вайб-кодинг" (vibecoding_tg)
 
-Источник: совет из канала "Вайб-кодинг" (vibecoding_tg)
+### 2026-03-04 10:53
+**Добавлено правило Proof of Work для всех агентов**
 
-Правило:
 ```
 Never say 'done' or 'working on it' unless the action has actually started.
-Every status update must include proof — a process ID, file path, URL, or command output.
+Every status update must include proof — process ID, file path, URL, or command output.
 No proof = didn't happen.
-A false completion is worse than a delayed honest answer.
 ```
-
-Обновлены файлы:
-- `workspace/AGENTS.md` — секция "Proof of Work Rule" в Telegram Status Protocol
-- `workspace-main-worker/AGENTS.md` — добавлено в CRITICAL RULES
-- `workspace-quick-research/AGENTS.md` — добавлено в начало
-- `workspace-quick-coder/AGENTS.md` — добавлено в начало
-- `workspace-main-reviewer/AGENTS.md` — добавлено в начало
