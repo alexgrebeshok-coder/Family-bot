@@ -58,6 +58,8 @@ import requests
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
+import memory as bot_memory
+
 # -----------------------------
 # Logging Setup
 # -----------------------------
@@ -1115,8 +1117,22 @@ def handle_onboarding(text: str, profile: Dict[str, Any]) -> Optional[str]:
 
 def build_help() -> str:
     return (
-        "Пользуйтесь кнопками меню ниже.\n"
-        "Что умею: списки, напоминания, расписание и дела, дни рождения, факты и идеи.\n"
+        "Пользуйтесь кнопками меню ниже.\n\n"
+        "🛒 Покупки:\n"
+        "• /купить [товар] — добавить\n"
+        "• /покупки — показать список\n"
+        "• /купил [номер] — отметить\n\n"
+        "🧠 Память:\n"
+        "• /запомни [текст] — сохранить\n"
+        "• /найди [запрос] — поиск\n"
+        "• /дневник — последние записи\n\n"
+        "👥 Контакты:\n"
+        "• /контакты — показать все\n"
+        "• /контакт [имя] — найти\n\n"
+        "🎯 Автономные задачи:\n"
+        "• /задача [цель] — на ночь\n"
+        "• /отчёт — недельный отчёт\n\n"
+        "📅 Расписание, дела — через меню.\n\n"
         "Если кнопки пропали — напишите «Меню»."
     )
 
@@ -1893,6 +1909,108 @@ def handle_message(text: str, user_id: int, profile: Dict[str, Any], state: Dict
         set_awaiting(profile, "delete_confirm")
         return ("Точно удалить ваши данные?", delete_confirm_keyboard())
 
+    # === Second Brain commands ===
+    if low.startswith("/запомни ") or low.startswith("запомни "):
+        text_to_remember = norm.split(" ", 1)[1] if " " in norm else ""
+        if text_to_remember:
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/second-brain/remember.sh", text_to_remember],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "✅ Запомнено!", profile)
+        return with_menu("Что запомнить? Напиши: /запомни [текст]", profile)
+
+    if low.startswith("/напомни ") or low.startswith("/найди ") or low.startswith("напомни ") or low.startswith("найди "):
+        query = norm.split(" ", 1)[1] if " " in norm else ""
+        if query:
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/second-brain/search.sh", query],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "Ничего не найдено", profile)
+        return with_menu("Что найти? Напиши: /найди [запрос]", profile)
+
+    if low in {"/дневник", "дневник", "/память", "память"}:
+        import subprocess
+        result = subprocess.run(
+            ["/Users/aleksandrgrebeshok/.openclaw/skills/second-brain/recent.sh", "3"],
+            capture_output=True, text=True
+        )
+        return with_menu(result.stdout.strip() or "Записей нет", profile)
+
+    # === Personal CRM commands ===
+    if low in {"/контакты", "контакты", "/contacts"}:
+        import subprocess
+        result = subprocess.run(
+            ["/Users/aleksandrgrebeshok/.openclaw/skills/personal-crm/list-contacts.sh"],
+            capture_output=True, text=True
+        )
+        return with_menu(result.stdout.strip() or "Нет контактов", profile)
+
+    if low.startswith("/контакт ") or low.startswith("/когда "):
+        query = norm.split(" ", 1)[1] if " " in norm else ""
+        if query:
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/personal-crm/find-contact.sh", query],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "Контакт не найден", profile)
+        return with_menu("Кого найти? Напиши: /контакт [имя]", profile)
+
+    # === Household Manager commands ===
+    if low.startswith("/купить ") or low.startswith("купить "):
+        item = norm.split(" ", 1)[1] if " " in norm else ""
+        if item:
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/household-manager/add-shopping.sh", item],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "✅ Добавлено", profile)
+        return with_menu("Что купить? Напиши: /купить [товар]", profile)
+
+    if low in {"/покупки", "покупки", "список покупок"}:
+        import subprocess
+        result = subprocess.run(
+            ["/Users/aleksandrgrebeshok/.openclaw/skills/household-manager/list-shopping.sh"],
+            capture_output=True, text=True
+        )
+        return with_menu(result.stdout.strip() or "Список пуст", profile)
+
+    if low.startswith("/купил ") or low.startswith("купил "):
+        num = norm.split(" ", 1)[1] if " " in norm else ""
+        if num.isdigit():
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/household-manager/done-shopping.sh", num],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "✅ Отмечено", profile)
+        return with_menu("Какой номер? Напиши: /купил [номер]", profile)
+
+    # === Autonomous Tasks commands ===
+    if low.startswith("/задача ") or low.startswith("задача на ночь"):
+        goal = norm.split(" ", 1)[1] if " " in norm else ""
+        if goal:
+            import subprocess
+            result = subprocess.run(
+                ["/Users/aleksandrgrebeshok/.openclaw/skills/autonomous-tasks/goal-task.sh", goal],
+                capture_output=True, text=True
+            )
+            return with_menu(result.stdout.strip() or "🎯 Задача запущена", profile)
+        return with_menu("Какую задачу выполнить? Напиши: /задача [цель]", profile)
+
+    if low in {"/отчёт", "/отчет", "недельный отчёт"}:
+        import subprocess
+        result = subprocess.run(
+            ["/Users/aleksandrgrebeshok/.openclaw/skills/autonomous-tasks/weekly-report.sh"],
+            capture_output=True, text=True
+        )
+        return with_menu(result.stdout.strip() or "Отчёт недоступен", profile)
+
     # Enhanced intent parsing (local + LLM)
     if not norm.startswith("/") and is_allowed(norm):
         audience = profile.get("audience") or ("child" if is_child_profile(profile) else "adult")
@@ -2421,6 +2539,10 @@ def main() -> int:
                 user_name = profile_name(profile) or f"User {user_id}"
                 text_preview = text[:50] + "..." if len(text) > 50 else text
                 bot_logger.info(f"Received message from {user_name} (id={user_id}): {text_preview}")
+                
+                # Save user message to memory
+                bot_memory.save_message(user_id, "user", text)
+                
                 update_profile_from_user(profile, user)
                 response = handle_message(text, user_id, profile, state)
                 if response:
@@ -2429,6 +2551,9 @@ def main() -> int:
                     if isinstance(response, tuple):
                         text_to_send, reply_markup = response
                     send_message(token, user_id, text_to_send, state, reply_markup=reply_markup)
+                    
+                    # Save assistant response to memory
+                    bot_memory.save_message(user_id, "assistant", text_to_send)
 
             state["last_update_id"] = offset
             save_state(state)

@@ -9,9 +9,16 @@
 WATCHDOG_LOG="/Users/aleksandrgrebeshok/.openclaw/workspace/logs/openclaw_watchdog.log"
 LOCKFILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/openclaw_watchdog.lock"
 HEARTBEAT_FILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_heartbeat.ts"
+STATE_FILE="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_state.txt"
+GATEWAY_LABEL="ai.openclaw.gateway"
+GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 MAX_ATTEMPTS=10
 BACKOFF_DELAYS=(5 15 30 60)  # backoff sequence in seconds
 WATCHDOG_NOTIFY_CMD="/Users/aleksandrgrebeshok/.openclaw/workspace/ops/watchdog_notify.sh"  # Optional: command to run for notifications
+HEALTH_RETRIES=3
+HEALTH_RETRY_DELAY=3
+RECOVERY_STABILIZE_TIMEOUT=20
+RECOVERY_POLL_INTERVAL=2
 
 # Transparency & Quiet Hours Configuration
 QUIET_HEARTBEAT_ONLY=true     # Only suppress heartbeat during quiet hours (critical events always sent)
@@ -46,6 +53,11 @@ log_error() {
 
 log_debug() {
     log "DEBUG" "$@"
+}
+
+ensure_paths() {
+    mkdir -p "$(dirname "${WATCHDOG_LOG}")" "$(dirname "${LOCKFILE}")"
+    touch "${WATCHDOG_LOG}"
 }
 
 #############################################
@@ -117,7 +129,6 @@ send_heartbeat_if_needed() {
 
 notify() {
     local message="$*"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local is_heartbeat=false
 
     # Check if this is a heartbeat message
@@ -136,13 +147,39 @@ notify() {
 
     # Execute notification command if configured
     if [ -n "${WATCHDOG_NOTIFY_CMD}" ]; then
-        # Execute with message as argument (quote-safe)
-        "${WATCHDOG_NOTIFY_CMD}" "${message}" > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            log_debug "Notification sent successfully"
-        else
-            log_warn "Notification command failed (exit code: $?)"
-        fi
+        # Dispatch asynchronously: alerts must never block recovery logic.
+        (
+            "${WATCHDOG_NOTIFY_CMD}" "${message}" > /dev/null 2>&1
+        ) &
+        log_debug "Notification dispatched asynchronously"
+    fi
+}
+
+read_state() {
+    if [ -f "${STATE_FILE}" ]; then
+        cat "${STATE_FILE}"
+    else
+        echo "unknown"
+    fi
+}
+
+write_state() {
+    local state="$1"
+    echo "${state}" > "${STATE_FILE}"
+}
+
+notify_on_state_change() {
+    local new_state="$1"
+    local message="$2"
+    local prev_state
+    prev_state="$(read_state)"
+
+    if [ "${prev_state}" != "${new_state}" ]; then
+        notify "${message}"
+        write_state "${new_state}"
+        log_info "State changed: ${prev_state} -> ${new_state}"
+    else
+        log_debug "State unchanged (${new_state}) - notification skipped"
     fi
 }
 
@@ -155,8 +192,7 @@ acquire_lock() {
         local pid=$(cat "${LOCKFILE}")
         if ps -p "${pid}" > /dev/null 2>&1; then
             log_warn "Watchdog already running with PID ${pid}"
-            echo "ERROR: Watchdog already running (PID: ${pid})"
-            exit 1
+            return 1
         else
             log_info "Removing stale lockfile (PID ${pid} not running)"
             rm -f "${LOCKFILE}"
@@ -165,6 +201,7 @@ acquire_lock() {
 
     echo $$ > "${LOCKFILE}"
     log_info "Acquired lock (PID: $$)"
+    return 0
 }
 
 release_lock() {
@@ -185,22 +222,137 @@ trap cleanup EXIT INT TERM
 # OpenClaw Gateway functions
 #############################################
 
+check_gateway_status_once() {
+    local quiet="${1:-false}"
+    local uid
+    uid="$(id -u)"
+
+    # launchd can briefly report non-running during restarts; do not fail solely on this signal.
+    if ! launchctl print "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null | grep -q "state = running"; then
+        if [ "${quiet}" != "true" ]; then
+            log_debug "Gateway launchd state is not 'running' (transient state allowed)"
+        fi
+    fi
+
+    if ! lsof -nP -iTCP:"${GATEWAY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+        if [ "${quiet}" != "true" ]; then
+            log_warn "Gateway port ${GATEWAY_PORT} is not listening"
+        fi
+        return 1
+    fi
+
+    # Validate endpoint response to avoid false-positive "port open but dead gateway" states.
+    if ! curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}/" >/dev/null 2>&1; then
+        if [ "${quiet}" != "true" ]; then
+            log_warn "Gateway HTTP probe failed on 127.0.0.1:${GATEWAY_PORT}"
+        fi
+        return 1
+    fi
+
+    return 0
+}
+
 check_gateway_status() {
-    # Returns 0 if gateway is running, 1 otherwise
-    openclaw gateway status > /dev/null 2>&1
-    return $?
+    local attempt=1
+
+    while [ ${attempt} -le ${HEALTH_RETRIES} ]; do
+        local quiet="false"
+        if [ ${attempt} -gt 1 ]; then
+            quiet="true"
+        fi
+
+        if check_gateway_status_once "${quiet}"; then
+            if [ ${attempt} -gt 1 ]; then
+                log_info "Gateway became healthy on retry ${attempt}/${HEALTH_RETRIES}"
+            fi
+            return 0
+        fi
+
+        if [ ${attempt} -lt ${HEALTH_RETRIES} ]; then
+            log_debug "Gateway health check retry ${attempt}/${HEALTH_RETRIES} in ${HEALTH_RETRY_DELAY}s"
+            sleep "${HEALTH_RETRY_DELAY}"
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    log_warn "Gateway status check failed after ${HEALTH_RETRIES} attempts"
+    return 1
+}
+
+wait_for_gateway_healthy() {
+    local timeout="${1:-${RECOVERY_STABILIZE_TIMEOUT}}"
+    local elapsed=0
+
+    while [ ${elapsed} -lt ${timeout} ]; do
+        if check_gateway_status_once "true"; then
+            return 0
+        fi
+        sleep "${RECOVERY_POLL_INTERVAL}"
+        elapsed=$((elapsed + RECOVERY_POLL_INTERVAL))
+    done
+
+    return 1
+}
+
+is_gateway_service_loaded() {
+    local uid
+    uid="$(id -u)"
+    launchctl print "gui/${uid}/${GATEWAY_LABEL}" >/dev/null 2>&1
 }
 
 restart_gateway() {
-    log_info "Attempting to restart gateway..."
-    openclaw gateway restart >> "${WATCHDOG_LOG}" 2>&1
-    local status=$?
-    if [ ${status} -eq 0 ]; then
-        log_info "Gateway restart command executed successfully"
-    else
-        log_error "Gateway restart command failed with exit code ${status}"
+    log_info "Attempting gateway recovery (restart -> start -> install+start)"
+
+    # Fast-path for the common failure mode in logs: service unit disappeared after stop/crash.
+    if ! is_gateway_service_loaded; then
+        log_warn "Gateway service is not loaded; skipping restart/start and running install-first recovery"
+        openclaw gateway install --force >> "${WATCHDOG_LOG}" 2>&1 || true
+        if wait_for_gateway_healthy; then
+            log_info "Gateway recovery succeeded via install --force (service was not loaded)"
+            return 0
+        fi
+
+        log_warn "Install --force did not recover gateway, trying explicit start..."
+        openclaw gateway start >> "${WATCHDOG_LOG}" 2>&1 || true
+        if wait_for_gateway_healthy; then
+            log_info "Gateway recovery succeeded via install + start (service was not loaded)"
+            return 0
+        fi
+
+        log_error "Install/start path failed while service was not loaded"
+        return 1
     fi
-    return ${status}
+
+    openclaw gateway restart >> "${WATCHDOG_LOG}" 2>&1 || true
+    if wait_for_gateway_healthy; then
+        log_info "Gateway recovery succeeded via restart"
+        return 0
+    fi
+
+    log_warn "Restart did not recover gateway, trying start..."
+    openclaw gateway start >> "${WATCHDOG_LOG}" 2>&1 || true
+    if wait_for_gateway_healthy; then
+        log_info "Gateway recovery succeeded via start"
+        return 0
+    fi
+
+    log_warn "Start did not recover gateway, trying install + start..."
+    openclaw gateway install --force >> "${WATCHDOG_LOG}" 2>&1 || true
+    if wait_for_gateway_healthy; then
+        log_info "Gateway recovery succeeded via install --force"
+        return 0
+    fi
+
+    log_warn "Install --force did not recover gateway, trying explicit start..."
+    openclaw gateway start >> "${WATCHDOG_LOG}" 2>&1 || true
+    if wait_for_gateway_healthy; then
+        log_info "Gateway recovery succeeded via install + start"
+        return 0
+    fi
+
+    log_error "All gateway recovery commands failed"
+    return 1
 }
 
 wait_and_check() {
@@ -215,20 +367,23 @@ wait_and_check() {
 #############################################
 
 main() {
+    ensure_paths
+
     log_info "=========================================="
     log_info "Watchdog started (PID: $$)"
     log_info "=========================================="
 
-    # Notify: watchdog started
-    notify "OpenClaw Watchdog: started (PID: $$), monitoring gateway..."
-
     # Acquire lock to prevent multiple instances
-    acquire_lock
+    if ! acquire_lock; then
+        log_info "Another watchdog instance is active, skipping this interval"
+        exit 0
+    fi
 
     # Check gateway status
     log_info "Checking gateway status..."
     if check_gateway_status; then
         log_info "Gateway is running - exiting cleanly"
+        write_state "up"
         # Send heartbeat if due
         send_heartbeat_if_needed
         exit 0
@@ -236,7 +391,7 @@ main() {
 
     # Notify: gateway down detected
     log_warn "Gateway is NOT running - starting recovery process"
-    notify "OpenClaw Watchdog: gateway DOWN detected, starting recovery..."
+    notify_on_state_change "down" "OpenClaw Watchdog: gateway DOWN detected, starting recovery..."
 
     # Recovery loop with backoff
     local attempt=0
@@ -249,16 +404,13 @@ main() {
 
         log_info "Recovery attempt ${attempt}/${MAX_ATTEMPTS} (backoff: ${delay}s)"
 
-        # Notify: restart attempt
-        notify "OpenClaw Watchdog: restart attempt ${attempt}/${MAX_ATTEMPTS}"
-
         # Try to restart gateway
         if restart_gateway; then
             # Wait and recheck
             if wait_and_check "${delay}"; then
                 # Notify: restart successful
                 log_info "Gateway recovered successfully!"
-                notify "OpenClaw Watchdog: gateway recovered after ${attempt} attempt(s)"
+                notify_on_state_change "up" "OpenClaw Watchdog: gateway recovered after ${attempt} attempt(s)"
                 success=true
             else
                 log_warn "Gateway still not running after restart"

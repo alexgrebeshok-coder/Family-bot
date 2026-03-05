@@ -8,7 +8,7 @@ set -euo pipefail
 THRESHOLD_MIN=120
 LOG_DIR="/Users/aleksandrgrebeshok/.openclaw/workspace/logs"
 HEALTHCHECK_LOG="$LOG_DIR/familybot_healthcheck.log"
-BOT_LOG="$HOME/Library/Logs/familybot_dialog.log"
+BOT_LOG="/tmp/family_bot.log"
 FAMILY_STATE_PATH="/Users/aleksandrgrebeshok/.openclaw/workspace/Проекты/Семейный Бот/data/family_state.json"
 TELEGRAM_TARGET="1258992460"
 
@@ -34,14 +34,15 @@ send_alert() {
 ISSUES=0
 ISSUE_MESSAGES=()
 
-# Check 1: launchctl list for com.openclaw.familybot.dialog
-log "Checking launchctl status for com.openclaw.familybot.dialog..."
-if ! launchctl list 2>/dev/null | grep -q "com.openclaw.familybot.dialog"; then
+# Check 1: launchctl list for com.familybot.dialog (updated name)
+log "Checking launchctl status for com.familybot.dialog..."
+LAUNCHCTL_CHECK=$(launchctl list 2>/dev/null | grep "com.familybot.dialog" || echo "")
+if [ -z "$LAUNCHCTL_CHECK" ]; then
     ISSUES=$((ISSUES + 1))
-    ISSUE_MESSAGES+=("LaunchAgent com.openclaw.familybot.dialog not found in launchctl list")
+    ISSUE_MESSAGES+=("LaunchAgent com.familybot.dialog not found in launchctl list")
     log "ERROR: LaunchAgent not found"
 else
-    log "OK: LaunchAgent is loaded"
+    log "OK: LaunchAgent is loaded ($LAUNCHCTL_CHECK)"
 fi
 
 # Check 2: bot_dialog.py process exists
@@ -77,8 +78,9 @@ fi
 # Check 4: Errors in bot log
 log "Checking for errors in bot log..."
 if [ -f "$BOT_LOG" ]; then
-    ERROR_COUNT=$(tail -n 200 "$BOT_LOG" | grep -cE "(ERROR|Traceback)" || echo "0")
-    if [ "$ERROR_COUNT" -gt 0 ]; then
+    ERROR_COUNT=$(tail -n 200 "$BOT_LOG" | grep -cE "(ERROR|Traceback)" 2>/dev/null || echo "0")
+    ERROR_COUNT=$(echo "$ERROR_COUNT" | tr -d '[:space:]')
+    if [ "$ERROR_COUNT" -gt 0 ] 2>/dev/null; then
         ISSUES=$((ISSUES + 1))
         ERROR_PREVIEW=$(tail -n 200 "$BOT_LOG" | grep -E "(ERROR|Traceback)" | tail -n 3 | head -c 200)
         ISSUE_MESSAGES+=("Found ${ERROR_COUNT} ERROR/Traceback in log (last: ${ERROR_PREVIEW})")

@@ -1,5 +1,65 @@
-# HEARTBEAT.md
+# HEARTBEAT.md - Периодические проверки
 
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+Выполнять каждые ~30 минут при heartbeat poll.
 
-# Add tasks below when you want the agent to check something periodically.
+## Обязательные проверки:
+
+### 1. Health Check (ВСЕГДА)
+- [ ] Проверить `openclaw status` — gateway работает?
+- [ ] Проверить rate limits — OpenRouter/ZAI доступны?
+- [ ] Проверить зависшие сессии (`abortedLastRun: true` > 5)
+- [ ] **Проверить свободную память** — если <300MB → предупредить
+- [ ] **Запустить self-healing.sh** — автоисправление проблем
+
+### 2. Контекст (если >50%)
+- [ ] Проверить `totalTokens / contextTokens`
+- [ ] Если >50% — запустить compact
+- [ ] Если >75% — предупредить пользователя
+
+### 3. Rate Limits (после council/parallel работы)
+- [ ] Проверить доступность провайдеров
+- [ ] Если OpenRouter down → переключить на ZAI
+- [ ] Логировать в memory/heartbeat-state.json
+
+## Формат ответа:
+
+**Если всё ОК:**
+```
+HEARTBEAT_OK
+```
+
+**Если проблемы:**
+```
+⚠️ ПРЕДУПРЕЖДЕНИЕ:
+- [проблема 1]
+- [проблема 2]
+
+Рекомендация: [что делать]
+```
+
+## Логирование:
+
+Сохранять состояние в `memory/heartbeat-state.json`:
+```json
+{
+  "lastCheck": "2026-02-22T11:22:00Z",
+  "status": "ok",
+  "contextPercent": 30,
+  "rateLimits": {
+    "openrouter": "ok",
+    "zai": "ok"
+  },
+  "abortedSessions": 2
+}
+```
+
+### 4. Память (ВАЖНО для MacBook Air 8GB)
+- [ ] Проверить `PhysMem: X unused`
+- [ ] Если <300MB → **НЕ запускать параллельных агентов**
+- [ ] Рекомендовать закрыть Codex/Notion
+
+## Когда НЕ делать heartbeat:
+- Поздно ночь (23:00-08:00) если нет критичных проблем
+- Пользователь явно занят
+- Меньше 30 минут с последней проверки
+- **Мало памяти (<300MB)** — сначала предупредить
